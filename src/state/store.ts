@@ -4,7 +4,7 @@ import type { TagCandidate } from '../core/detect';
 import { pointInPolygon } from '../core/geometry';
 import { areaSquareFeet } from '../core/scale';
 
-export type Tool = 'pan' | 'calibrate' | 'area' | 'rect' | 'add' | 'erase';
+export type Tool = 'pan' | 'calibrate' | 'area' | 'rect' | 'match' | 'add' | 'erase';
 
 export interface PageState {
   scale: ScaleSetting | null;
@@ -32,6 +32,17 @@ export interface PendingCalibration {
   b: Pt;
 }
 
+/** Box drawn around one example symbol, awaiting a type name. */
+export interface PendingMatch {
+  a: Pt;
+  b: Pt;
+}
+
+export interface MatchRequest {
+  tag: string;
+  box: PendingMatch;
+}
+
 interface TakeoffState {
   fileName: string | null;
   numPages: number;
@@ -42,6 +53,9 @@ interface TakeoffState {
   zoom: number;
   tagColors: Record<string, string>;
   pendingCalibration: PendingCalibration | null;
+  pendingMatch: PendingMatch | null;
+  matchRequest: MatchRequest | null;
+  matchStatus: string | null;
   pages: Record<number, PageState>;
 
   setDocument(fileName: string, numPages: number, pageLabels: string[]): void;
@@ -51,6 +65,11 @@ interface TakeoffState {
   setActiveTag(tag: string | null): void;
   setZoom(z: number): void;
   setPendingCalibration(p: PendingCalibration | null): void;
+  setPendingMatch(p: PendingMatch | null): void;
+  requestMatch(tag: string): void;
+  clearMatchRequest(): void;
+  setMatchStatus(s: string | null): void;
+  setMatchedPoints(page: number, tag: string, points: Pt[]): void;
   setScale(scale: ScaleSetting): void;
   setCandidates(page: number, candidates: TagCandidate[]): void;
   toggleTag(tag: string): void;
@@ -96,6 +115,9 @@ export const useStore = create<TakeoffState>((set) => ({
   zoom: 1,
   tagColors: {},
   pendingCalibration: null,
+  pendingMatch: null,
+  matchRequest: null,
+  matchStatus: null,
   pages: {},
 
   setDocument: (fileName, numPages, pageLabels) =>
@@ -110,16 +132,64 @@ export const useStore = create<TakeoffState>((set) => ({
       tool: 'pan',
       activeTag: null,
       pendingCalibration: null,
+      pendingMatch: null,
+      matchRequest: null,
+      matchStatus: null,
     }),
 
   closeDocument: () =>
     set({ fileName: null, numPages: 0, pageLabels: [], pages: {}, pendingCalibration: null }),
 
-  setPage: (n) => set({ currentPage: n, pendingCalibration: null }),
-  setTool: (tool) => set({ tool, pendingCalibration: null }),
+  setPage: (n) =>
+    set({ currentPage: n, pendingCalibration: null, pendingMatch: null, matchStatus: null }),
+  setTool: (tool) => set({ tool, pendingCalibration: null, pendingMatch: null }),
   setActiveTag: (activeTag) => set({ activeTag }),
   setZoom: (zoom) => set({ zoom: Math.min(8, Math.max(0.2, zoom)) }),
   setPendingCalibration: (pendingCalibration) => set({ pendingCalibration }),
+  setPendingMatch: (pendingMatch) => set({ pendingMatch }),
+
+  requestMatch: (tag) =>
+    set((s) =>
+      s.pendingMatch
+        ? { matchRequest: { tag, box: s.pendingMatch }, pendingMatch: null }
+        : {},
+    ),
+  clearMatchRequest: () => set({ matchRequest: null }),
+  setMatchStatus: (matchStatus) => set({ matchStatus }),
+
+  /**
+   * Install symbol-match results as the detection points for `tag` on the
+   * page: replaces any prior points for that tag, clears that tag's
+   * erasures, enables it, and gives it a color.
+   */
+  setMatchedPoints: (pageNum, tag, points) =>
+    set((s) => {
+      const page = s.pages[pageNum] ?? emptyPageState;
+      const candidates = [
+        ...page.candidates.filter((c) => c.tag !== tag),
+        { tag, points },
+      ].sort((a, b) => b.points.length - a.points.length || a.tag.localeCompare(b.tag));
+      const tagColors = { ...s.tagColors };
+      if (!(tag in tagColors)) {
+        tagColors[tag] = PALETTE[Object.keys(tagColors).length % PALETTE.length];
+      }
+      return {
+        ...patchPage(
+          s,
+          {
+            candidates,
+            enabledTags: page.enabledTags.includes(tag)
+              ? page.enabledTags
+              : [...page.enabledTags, tag],
+            deletedAutoIds: page.deletedAutoIds.filter(
+              (id) => !id.startsWith(`auto:${tag}:`),
+            ),
+          },
+          pageNum,
+        ),
+        tagColors,
+      };
+    }),
 
   setScale: (scale) => set((s) => patchPage(s, { scale })),
 

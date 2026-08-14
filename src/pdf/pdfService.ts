@@ -1,6 +1,7 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { toGray, type GrayImage } from '../core/match';
 import type { PageTextItem } from '../types';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -64,6 +65,52 @@ export async function renderPage(
     pageWidth: base.width,
     pageHeight: base.height,
   };
+}
+
+export interface GrayRender {
+  gray: GrayImage;
+  /** Multiply page-space coordinates by this to get image pixels. */
+  scale: number;
+}
+
+const MAX_MATCH_DIM = 4096;
+const grayCache = new WeakMap<PDFDocumentProxy, Map<number, GrayRender>>();
+
+/**
+ * Rasterize a page to grayscale for symbol matching. Cached per document
+ * and page — matching may run several times per sheet.
+ */
+export async function renderPageGray(
+  doc: PDFDocumentProxy,
+  pageNum: number,
+): Promise<GrayRender> {
+  let pages = grayCache.get(doc);
+  if (!pages) {
+    pages = new Map();
+    grayCache.set(doc, pages);
+  }
+  const cached = pages.get(pageNum);
+  if (cached) return cached;
+
+  const page = await doc.getPage(pageNum);
+  const base = page.getViewport({ scale: 1 });
+  const scale = Math.min(2, MAX_MATCH_DIM / Math.max(base.width, base.height));
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.floor(viewport.width);
+  canvas.height = Math.floor(viewport.height);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('Canvas 2D context unavailable');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const result: GrayRender = {
+    gray: toGray(imageData.data, canvas.width, canvas.height),
+    scale,
+  };
+  pages.set(pageNum, result);
+  return result;
 }
 
 /**

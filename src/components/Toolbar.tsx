@@ -6,6 +6,7 @@ const TOOLS: { id: Tool; label: string; title: string }[] = [
   { id: 'calibrate', label: 'Calibrate', title: 'Set scale from a known dimension' },
   { id: 'area', label: 'Draw Area', title: 'Outline a space corner by corner' },
   { id: 'rect', label: 'Rectangle', title: 'Drag a rectangular area' },
+  { id: 'match', label: 'Match Symbol', title: 'Box one fixture symbol; find all identical ones' },
   { id: 'add', label: 'Add Fixture', title: 'Click to add a missed fixture' },
   { id: 'erase', label: 'Erase', title: 'Click a marker to remove it' },
 ];

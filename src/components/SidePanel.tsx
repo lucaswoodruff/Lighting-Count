@@ -165,10 +165,12 @@ function TagSection() {
       </p>
       {page.candidates.length === 0 && (
         <div className="warn">
-          No candidate tags found on this sheet. If this is a scanned (non-vector) drawing,
-          use Add Fixture to count manually.
+          No candidate tags found on this sheet. If the drawing's text isn't real text
+          (outlined CAD text or a scan), use the Match Symbol tool: box one example fixture
+          and the app finds all identical symbols.
         </div>
       )}
+      <MatchControls />
       <div className="tag-list">
         {shown.map((c) => {
           const enabled = page.enabledTags.includes(c.tag);
@@ -215,6 +217,49 @@ function TagSection() {
         </button>
       </div>
     </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+/** Name-and-run controls for a drawn symbol-match box, plus status line. */
+function MatchControls() {
+  const pendingMatch = useStore((s) => s.pendingMatch);
+  const matchRequest = useStore((s) => s.matchRequest);
+  const matchStatus = useStore((s) => s.matchStatus);
+  const requestMatch = useStore((s) => s.requestMatch);
+  const setPendingMatch = useStore((s) => s.setPendingMatch);
+  const [matchTag, setMatchTag] = useState('');
+
+  function run() {
+    const tag = matchTag.trim().toUpperCase();
+    if (!tag) return;
+    requestMatch(tag);
+    setMatchTag('');
+  }
+
+  if (!pendingMatch && !matchStatus && !matchRequest) return null;
+  return (
+    <div style={{ margin: '6px 0' }}>
+      {pendingMatch && (
+        <div className="row">
+          <input
+            type="text"
+            style={{ width: 90 }}
+            placeholder="Type (e.g. F1)"
+            value={matchTag}
+            autoFocus
+            onChange={(e) => setMatchTag(e.target.value.toUpperCase())}
+            onKeyDown={(e) => e.key === 'Enter' && run()}
+          />
+          <button className="primary" disabled={!matchTag.trim()} onClick={run}>
+            Find matches
+          </button>
+          <button onClick={() => setPendingMatch(null)}>Cancel</button>
+        </div>
+      )}
+      {matchStatus && <div className="note">{matchStatus}</div>}
+    </div>
   );
 }
 

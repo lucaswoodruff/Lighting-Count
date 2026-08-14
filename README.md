@@ -17,8 +17,15 @@ All processing happens in the browser. Drawings never leave your machine.
    fixture type tags (A, B2, EM, …) and lists candidates with counts. Check the
    ones that are real fixture types; each becomes a set of colored markers on
    the plan.
-4. **Draw areas** — click vertices, double-click (or Enter) to close. Multiple
-   named areas per sheet are supported.
+
+   If the drawing's text isn't real text (outlined CAD text or a scan), use
+   **Match Symbol** instead: drag a snug box around one example fixture symbol,
+   name the type, and the app finds every identical symbol on the sheet by
+   image correlation. Rotated copies are not matched — run it once per
+   orientation if needed.
+4. **Draw areas** — click vertices, double-click (or Enter) to close, or use
+   the Rectangle tool to drag rectangular areas. Multiple named areas per
+   sheet are supported.
 5. **Correct** — erase false-positive markers, add markers the detection
    missed. Counts update live.
 6. **Export** — download an .xlsx with one row per area: name, square footage,

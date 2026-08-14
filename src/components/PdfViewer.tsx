@@ -14,6 +14,7 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
   const activeTag = useStore((s) => s.activeTag);
   const tagColors = useStore((s) => s.tagColors);
   const pendingCalibration = useStore((s) => s.pendingCalibration);
+  const pendingMatch = useStore((s) => s.pendingMatch);
   const page = usePageState();
 
   const viewerRef = useRef<HTMLDivElement>(null);
@@ -148,6 +149,7 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
         setCalStart(null);
         setRectStart(null);
         useStore.getState().setPendingCalibration(null);
+        useStore.getState().setPendingMatch(null);
       } else if (e.key === 'Enter' && draftPts.length >= 3) {
         useStore.getState().addArea(dedupe(draftPts));
         setDraftPts([]);
@@ -234,24 +236,28 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
   }
 
   function onStageMouseMove() {
-    if (tool === 'area' || tool === 'calibrate' || tool === 'rect') {
+    if (tool === 'area' || tool === 'calibrate' || tool === 'rect' || tool === 'match') {
       setCursor(pointerPagePos());
     }
   }
 
   function onStageMouseDown() {
-    if (tool !== 'rect') return;
+    if (tool !== 'rect' && tool !== 'match') return;
     setRectStart(pointerPagePos());
   }
 
   function onStageMouseUp() {
-    if (tool !== 'rect' || !rectStart) return;
+    if ((tool !== 'rect' && tool !== 'match') || !rectStart) return;
     const b = pointerPagePos();
     setRectStart(null);
     if (!b) return;
     // Ignore accidental clicks — require a real drag in both directions.
     if (Math.abs(b.x - rectStart.x) < 4 / zoom || Math.abs(b.y - rectStart.y) < 4 / zoom) return;
-    useStore.getState().addArea(rectCorners(rectStart, b));
+    if (tool === 'rect') {
+      useStore.getState().addArea(rectCorners(rectStart, b));
+    } else {
+      useStore.getState().setPendingMatch({ a: rectStart, b });
+    }
   }
 
   function onMarkerClick(e: KonvaEventObject<MouseEvent>, id: string) {
@@ -323,15 +329,24 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
                   ))}
                 </>
               )}
-              {/* Draft rectangle */}
-              {tool === 'rect' && rectStart && cursor && (
+              {/* Draft rectangle (area or match template) */}
+              {(tool === 'rect' || tool === 'match') && rectStart && cursor && (
                 <Line
                   points={flat(rectCorners(rectStart, cursor))}
                   closed
-                  stroke="#1d4ed8"
+                  stroke={tool === 'rect' ? '#1d4ed8' : '#ea580c'}
                   strokeWidth={px(1.5)}
                   dash={[px(6), px(4)]}
-                  fill="rgba(37, 99, 235, 0.08)"
+                  fill={tool === 'rect' ? 'rgba(37, 99, 235, 0.08)' : 'rgba(234, 88, 12, 0.08)'}
+                />
+              )}
+              {/* Pending match template awaiting a type name */}
+              {pendingMatch && (
+                <Line
+                  points={flat(rectCorners(pendingMatch.a, pendingMatch.b))}
+                  closed
+                  stroke="#ea580c"
+                  strokeWidth={px(2)}
                 />
               )}
               {/* Calibration line */}
