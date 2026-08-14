@@ -54,6 +54,29 @@ export function impliedFeetPerPaperInch(scale: ScaleSetting): number {
   return scale.feetPerUnit * POINTS_PER_INCH;
 }
 
+/**
+ * Parse a user-entered real-world length. Accepts decimal feet ("24.5"),
+ * feet-inches ("24'-6\"", "24' 6\"", "24ft 6in"), or bare inches ("30\"").
+ * Returns feet, or null if unparseable.
+ */
+export function parseFeetInches(raw: string): number | null {
+  const s = raw.trim().toLowerCase().replace(/feet|ft\.?/g, "'").replace(/inches|in\.?/g, '"');
+  if (s.length === 0) return null;
+
+  // bare inches: 30"
+  const inchOnly = s.match(/^(\d+(?:\.\d+)?)\s*"$/);
+  if (inchOnly) return parseFloat(inchOnly[1]) / 12;
+
+  // feet with optional inches: 24  |  24'  |  24'-6"  |  24' 6 1/2"
+  const m = s.match(/^(\d+(?:\.\d+)?)\s*'?\s*(?:-?\s*(\d+(?:\.\d+)?)\s*(?:(\d+)\/(\d+))?\s*"?)?$/);
+  if (!m) return null;
+  const feet = parseFloat(m[1]);
+  let inches = m[2] ? parseFloat(m[2]) : 0;
+  if (m[3] && m[4] && parseInt(m[4]) !== 0) inches += parseInt(m[3]) / parseInt(m[4]);
+  if (inches >= 12 && m[2] && s.includes("'")) return null; // "24'-14"" is a typo
+  return feet + inches / 12;
+}
+
 export interface NamedRatio {
   label: string;
   paperInches: number;

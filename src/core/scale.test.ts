@@ -3,6 +3,7 @@ import {
   areaSquareFeet,
   impliedFeetPerPaperInch,
   lengthFeet,
+  parseFeetInches,
   scaleFromCalibration,
   scaleFromRatio,
 } from './scale';
@@ -63,5 +64,29 @@ describe('measurements', () => {
     // Calibrate over a line that is 36 pts = 0.5 paper inch = 2 real ft at 1/4"
     const cal = scaleFromCalibration({ x: 0, y: 0 }, { x: 36, y: 0 }, 2);
     expect(cal.feetPerUnit).toBeCloseTo(ratio.feetPerUnit, 10);
+  });
+});
+
+describe('parseFeetInches', () => {
+  it('parses decimal feet', () => {
+    expect(parseFeetInches('24.5')).toBeCloseTo(24.5, 10);
+    expect(parseFeetInches('24')).toBe(24);
+  });
+
+  it('parses feet-inches notation', () => {
+    expect(parseFeetInches(`24'-6"`)).toBeCloseTo(24.5, 10);
+    expect(parseFeetInches(`24' 6"`)).toBeCloseTo(24.5, 10);
+    expect(parseFeetInches(`24ft 6in`)).toBeCloseTo(24.5, 10);
+    expect(parseFeetInches(`24' 6 1/2"`)).toBeCloseTo(24 + 6.5 / 12, 10);
+  });
+
+  it('parses bare inches', () => {
+    expect(parseFeetInches('30"')).toBeCloseTo(2.5, 10);
+  });
+
+  it('rejects garbage', () => {
+    expect(parseFeetInches('')).toBeNull();
+    expect(parseFeetInches('abc')).toBeNull();
+    expect(parseFeetInches(`24'-14"`)).toBeNull();
   });
 });
