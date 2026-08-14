@@ -14,6 +14,12 @@ describe('isTagCandidate', () => {
     }
   });
 
+  it('rejects common drawing-note words that fit the pattern', () => {
+    for (const s of ['THE', 'AND', 'WITH', 'ZONE', 'HOUR', 'TYP', 'LED', 'EXIT']) {
+      expect(isTagCandidate(s), s).toBe(false);
+    }
+  });
+
   it('tolerates surrounding whitespace', () => {
     expect(isTagCandidate(' B2 ')).toBe(true);
   });

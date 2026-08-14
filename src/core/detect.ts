@@ -11,10 +11,25 @@ import type { PageTextItem, Pt } from '../types';
 const TAG_RE = /^[A-Z]{1,3}-?\d{0,3}[A-Z]?$/;
 const MAX_TAG_LEN = 6;
 
+/**
+ * Frequent all-caps words on drawings that match the tag pattern but are
+ * never fixture types. Anything wrongly excluded can still be added manually
+ * in the UI.
+ */
+const STOPWORDS = new Set([
+  'THE', 'AND', 'FOR', 'WITH', 'THIS', 'THAT', 'ALL', 'ANY', 'ARE', 'BE',
+  'BY', 'IN', 'ON', 'AT', 'TO', 'OF', 'OR', 'AS', 'IS', 'IT', 'AN', 'NO',
+  'NOT', 'NEW', 'PER', 'SEE', 'USE', 'VIA', 'EACH', 'ONE', 'TWO', 'SHALL',
+  'TYP', 'AFF', 'NTS', 'MIN', 'MAX', 'REF', 'DIM', 'GFI', 'GFCI', 'WP',
+  'ZONE', 'ROOM', 'HOUR', 'NOTE', 'PLAN', 'WALL', 'CLG', 'LED', 'VA', 'KVA',
+  'AMP', 'AWG', 'EXIT', 'FAN', 'CRI', 'CCT', 'VOLT', 'WATT', 'LTG', 'UNO',
+]);
+
 export function isTagCandidate(raw: string): boolean {
   const s = raw.trim();
   if (s.length === 0 || s.length > MAX_TAG_LEN) return false;
   if (!/[A-Z]/.test(s)) return false; // must contain a letter (rules out room numbers)
+  if (STOPWORDS.has(s)) return false;
   return TAG_RE.test(s);
 }
 
