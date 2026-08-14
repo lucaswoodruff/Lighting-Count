@@ -168,9 +168,21 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
 
   function onStageDblClick() {
     if (tool !== 'area') return;
+    // Konva fires dblclick for any two clicks within 400ms, however far
+    // apart. Only close the polygon when the last two clicks were at the
+    // same spot (a genuine double-click), so rapid vertex clicking never
+    // clears or prematurely closes the draft.
+    const n = draftPts.length;
+    if (n >= 2) {
+      const a = draftPts[n - 1];
+      const b = draftPts[n - 2];
+      if (Math.hypot(a.x - b.x, a.y - b.y) > 4 / zoom) return;
+    }
     const pts = dedupe(draftPts);
-    if (pts.length >= 3) useStore.getState().addArea(pts);
-    setDraftPts([]);
+    if (pts.length >= 3) {
+      useStore.getState().addArea(pts);
+      setDraftPts([]);
+    }
   }
 
   function onStageMouseMove() {
