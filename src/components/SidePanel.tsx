@@ -151,6 +151,7 @@ function TagSection() {
   const tagColors = useStore((s) => s.tagColors);
   const toggleTag = useStore((s) => s.toggleTag);
   const addCustomTag = useStore((s) => s.addCustomTag);
+  const removeTag = useStore((s) => s.removeTag);
   const [showAll, setShowAll] = useState(false);
   const [newTag, setNewTag] = useState('');
 
@@ -183,6 +184,16 @@ function TagSection() {
               />
               <span className="tag">{c.tag}</span>
               <span className="count">×{c.points.length}</span>
+              <button
+                className="del"
+                title={`Remove type ${c.tag} and all its markers`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  removeTag(c.tag);
+                }}
+              >
+                ×
+              </button>
             </label>
           );
         })}
@@ -222,13 +233,13 @@ function TagSection() {
 
 /* ------------------------------------------------------------------ */
 
-/** Name-and-run controls for a drawn symbol-match box, plus status line. */
+/** Name-and-run controls for drawn symbol-match example boxes, plus status. */
 function MatchControls() {
-  const pendingMatch = useStore((s) => s.pendingMatch);
+  const boxCount = useStore((s) => s.pendingMatchBoxes.length);
   const matchRequest = useStore((s) => s.matchRequest);
   const matchStatus = useStore((s) => s.matchStatus);
   const requestMatch = useStore((s) => s.requestMatch);
-  const setPendingMatch = useStore((s) => s.setPendingMatch);
+  const clearPendingMatchBoxes = useStore((s) => s.clearPendingMatchBoxes);
   const [matchTag, setMatchTag] = useState('');
 
   function run() {
@@ -238,25 +249,38 @@ function MatchControls() {
     setMatchTag('');
   }
 
-  if (!pendingMatch && !matchStatus && !matchRequest) return null;
+  if (boxCount === 0 && !matchStatus && !matchRequest) return null;
   return (
     <div style={{ margin: '6px 0' }}>
-      {pendingMatch && (
-        <div className="row">
-          <input
-            type="text"
-            style={{ width: 90 }}
-            placeholder="Type (e.g. F1)"
-            value={matchTag}
-            autoFocus
-            onChange={(e) => setMatchTag(e.target.value.toUpperCase())}
-            onKeyDown={(e) => e.key === 'Enter' && run()}
-          />
-          <button className="primary" disabled={!matchTag.trim()} onClick={run}>
-            Find matches
-          </button>
-          <button onClick={() => setPendingMatch(null)}>Cancel</button>
-        </div>
+      {boxCount > 0 && (
+        <>
+          <div className="note">
+            {boxCount} example{boxCount > 1 ? 's' : ''} boxed — box more on the plan, or name
+            the type and search:
+          </div>
+          <div className="row">
+            <input
+              type="text"
+              style={{ width: 90 }}
+              placeholder="Type (e.g. F1)"
+              value={matchTag}
+              autoFocus
+              onChange={(e) => setMatchTag(e.target.value.toUpperCase())}
+              onKeyDown={(e) => e.key === 'Enter' && run()}
+            />
+            <button className="primary" disabled={!matchTag.trim()} onClick={run}>
+              Find matches
+            </button>
+            <button
+              onClick={() => {
+                clearPendingMatchBoxes();
+                setMatchTag('');
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
       )}
       {matchStatus && <div className="note">{matchStatus}</div>}
     </div>

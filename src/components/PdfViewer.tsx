@@ -14,7 +14,7 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
   const activeTag = useStore((s) => s.activeTag);
   const tagColors = useStore((s) => s.tagColors);
   const pendingCalibration = useStore((s) => s.pendingCalibration);
-  const pendingMatch = useStore((s) => s.pendingMatch);
+  const pendingMatchBoxes = useStore((s) => s.pendingMatchBoxes);
   const page = usePageState();
 
   const viewerRef = useRef<HTMLDivElement>(null);
@@ -149,7 +149,7 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
         setCalStart(null);
         setRectStart(null);
         useStore.getState().setPendingCalibration(null);
-        useStore.getState().setPendingMatch(null);
+        useStore.getState().clearPendingMatchBoxes();
       } else if (e.key === 'Enter' && draftPts.length >= 3) {
         useStore.getState().addArea(dedupe(draftPts));
         setDraftPts([]);
@@ -256,7 +256,7 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
     if (tool === 'rect') {
       useStore.getState().addArea(rectCorners(rectStart, b));
     } else {
-      useStore.getState().setPendingMatch({ a: rectStart, b });
+      useStore.getState().addPendingMatchBox({ a: rectStart, b });
     }
   }
 
@@ -340,15 +340,16 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
                   fill={tool === 'rect' ? 'rgba(37, 99, 235, 0.08)' : 'rgba(234, 88, 12, 0.08)'}
                 />
               )}
-              {/* Pending match template awaiting a type name */}
-              {pendingMatch && (
+              {/* Pending match example boxes awaiting a type name */}
+              {pendingMatchBoxes.map((b, i) => (
                 <Line
-                  points={flat(rectCorners(pendingMatch.a, pendingMatch.b))}
+                  key={i}
+                  points={flat(rectCorners(b.a, b.b))}
                   closed
                   stroke="#ea580c"
                   strokeWidth={px(2)}
                 />
-              )}
+              ))}
               {/* Calibration line */}
               {tool === 'calibrate' && calStart && cursor && (
                 <Line

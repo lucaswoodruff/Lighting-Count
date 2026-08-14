@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { crop, downsample, matchTemplate, toGray, type GrayImage } from './match';
+import {
+  crop,
+  dedupeAppend,
+  downsample,
+  matchTemplate,
+  mergeMatchSets,
+  toGray,
+  type GrayImage,
+} from './match';
 
 /** Blank page with a distinctive 16x12 glyph stamped at given positions. */
 function makePage(width: number, height: number, stamps: [number, number][]): GrayImage {
@@ -84,5 +92,49 @@ describe('matchTemplate', () => {
     const img = makePage(100, 100, [[10, 10]]);
     const blank = crop(img, 60, 60, 16, 12);
     expect(() => matchTemplate(img, blank)).toThrow(/contrast/i);
+  });
+});
+
+describe('mergeMatchSets', () => {
+  it('unions matches from multiple templates without double-counting', () => {
+    const setA = {
+      matches: [
+        { center: { x: 10, y: 10 }, score: 0.95 },
+        { center: { x: 50, y: 50 }, score: 0.9 },
+      ],
+      tplW: 16,
+      tplH: 12,
+    };
+    const setB = {
+      matches: [
+        { center: { x: 11, y: 10 }, score: 0.85 }, // same fixture as A's first
+        { center: { x: 90, y: 20 }, score: 0.88 }, // found only by template B
+      ],
+      tplW: 16,
+      tplH: 12,
+    };
+    const merged = mergeMatchSets([setA, setB]);
+    expect(merged).toHaveLength(3);
+    // The duplicate kept the higher score
+    const first = merged.find((m) => Math.abs(m.center.x - 10) <= 1)!;
+    expect(first.score).toBe(0.95);
+  });
+});
+
+describe('dedupeAppend', () => {
+  it('appends only points not already represented', () => {
+    const existing = [
+      { x: 10, y: 10 },
+      { x: 50, y: 50 },
+    ];
+    const incoming = [
+      { x: 12, y: 10 }, // duplicate of first within radius 5
+      { x: 80, y: 80 }, // new
+    ];
+    const out = dedupeAppend(existing, incoming, 5);
+    expect(out).toHaveLength(3);
+    expect(out[2]).toEqual({ x: 80, y: 80 });
+    // existing points keep their positions (indices stay stable for erasures)
+    expect(out[0]).toEqual({ x: 10, y: 10 });
   });
 });

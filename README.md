@@ -19,10 +19,12 @@ All processing happens in the browser. Drawings never leave your machine.
    the plan.
 
    If the drawing's text isn't real text (outlined CAD text or a scan), use
-   **Match Symbol** instead: drag a snug box around one example fixture symbol,
-   name the type, and the app finds every identical symbol on the sheet by
-   image correlation. Rotated copies are not matched — run it once per
-   orientation if needed.
+   **Match Symbol** instead: drag a snug box around an example fixture symbol
+   — box several examples if the symbol prints slightly differently — then
+   name the type, and the app finds everything matching any of the examples
+   by image correlation. Results merge, so if some fixtures were missed, box
+   a missed one and run the same type again to top up the count. Rotated
+   copies are not matched — run once per orientation if needed.
 4. **Draw areas** — click vertices, double-click (or Enter) to close, or use
    the Rectangle tool to drag rectangular areas. Multiple named areas per
    sheet are supported.

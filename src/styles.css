@@ -217,6 +217,18 @@ button {
   margin-left: auto;
 }
 
+.tag-row .del {
+  color: #b91c1c;
+  background: none;
+  border: none;
+  padding: 0 4px;
+  visibility: hidden;
+}
+
+.tag-row:hover .del {
+  visibility: visible;
+}
+
 /* ---- results ---- */
 
 .results-table {

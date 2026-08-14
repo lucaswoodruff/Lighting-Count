@@ -101,6 +101,47 @@ export function matchTemplate(image: GrayImage, tpl: GrayImage, threshold = 0.8)
   return results.slice(0, 3000);
 }
 
+export interface TemplateMatchSet {
+  matches: Match[];
+  tplW: number;
+  tplH: number;
+}
+
+/**
+ * Union the matches of several templates of the SAME symbol (the user boxed
+ * multiple examples). A location found by more than one template is kept
+ * once, at its best score.
+ */
+export function mergeMatchSets(sets: TemplateMatchSet[]): Match[] {
+  const all = sets.flatMap((s) =>
+    s.matches.map((m) => ({ m, r: Math.min(s.tplW, s.tplH) * 0.6 })),
+  );
+  all.sort((a, b) => b.m.score - a.m.score);
+  const kept: { m: Match; r: number }[] = [];
+  for (const c of all) {
+    const dup = kept.some(
+      (k) =>
+        Math.hypot(k.m.center.x - c.m.center.x, k.m.center.y - c.m.center.y) <
+        Math.min(k.r, c.r),
+    );
+    if (!dup) kept.push(c);
+  }
+  return kept.map((k) => k.m);
+}
+
+/**
+ * Append incoming points that aren't already represented within `radius` of
+ * an existing point — re-running a match tops up a type without doubling
+ * previously found fixtures.
+ */
+export function dedupeAppend(existing: Pt[], incoming: Pt[], radius: number): Pt[] {
+  const out = [...existing];
+  for (const p of incoming) {
+    if (out.every((q) => Math.hypot(q.x - p.x, q.y - p.y) >= radius)) out.push(p);
+  }
+  return out;
+}
+
 function zeroMean(img: GrayImage): { data: Float32Array; norm: number } {
   let mean = 0;
   for (const v of img.data) mean += v;

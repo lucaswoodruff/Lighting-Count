@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { AreaShape, AreaResult, Marker, Pt, ScaleSetting } from '../types';
 import type { TagCandidate } from '../core/detect';
 import { pointInPolygon } from '../core/geometry';
+import { dedupeAppend } from '../core/match';
 import { areaSquareFeet } from '../core/scale';
 
 export type Tool = 'pan' | 'calibrate' | 'area' | 'rect' | 'match' | 'add' | 'erase';
@@ -32,7 +33,7 @@ export interface PendingCalibration {
   b: Pt;
 }
 
-/** Box drawn around one example symbol, awaiting a type name. */
+/** Box drawn around one example symbol. */
 export interface PendingMatch {
   a: Pt;
   b: Pt;
@@ -40,7 +41,7 @@ export interface PendingMatch {
 
 export interface MatchRequest {
   tag: string;
-  box: PendingMatch;
+  boxes: PendingMatch[];
 }
 
 interface TakeoffState {
@@ -53,7 +54,8 @@ interface TakeoffState {
   zoom: number;
   tagColors: Record<string, string>;
   pendingCalibration: PendingCalibration | null;
-  pendingMatch: PendingMatch | null;
+  /** Example boxes accumulated for the next symbol match (multi-example). */
+  pendingMatchBoxes: PendingMatch[];
   matchRequest: MatchRequest | null;
   matchStatus: string | null;
   pages: Record<number, PageState>;
@@ -65,11 +67,13 @@ interface TakeoffState {
   setActiveTag(tag: string | null): void;
   setZoom(z: number): void;
   setPendingCalibration(p: PendingCalibration | null): void;
-  setPendingMatch(p: PendingMatch | null): void;
+  addPendingMatchBox(p: PendingMatch): void;
+  clearPendingMatchBoxes(): void;
   requestMatch(tag: string): void;
   clearMatchRequest(): void;
   setMatchStatus(s: string | null): void;
-  setMatchedPoints(page: number, tag: string, points: Pt[]): void;
+  mergeMatchedPoints(page: number, tag: string, points: Pt[], dedupeRadius: number): void;
+  removeTag(tag: string): void;
   setScale(scale: ScaleSetting): void;
   setCandidates(page: number, candidates: TagCandidate[]): void;
   toggleTag(tag: string): void;
@@ -115,7 +119,7 @@ export const useStore = create<TakeoffState>((set) => ({
   zoom: 1,
   tagColors: {},
   pendingCalibration: null,
-  pendingMatch: null,
+  pendingMatchBoxes: [],
   matchRequest: null,
   matchStatus: null,
   pages: {},
@@ -132,7 +136,7 @@ export const useStore = create<TakeoffState>((set) => ({
       tool: 'pan',
       activeTag: null,
       pendingCalibration: null,
-      pendingMatch: null,
+      pendingMatchBoxes: [],
       matchRequest: null,
       matchStatus: null,
     }),
@@ -141,33 +145,38 @@ export const useStore = create<TakeoffState>((set) => ({
     set({ fileName: null, numPages: 0, pageLabels: [], pages: {}, pendingCalibration: null }),
 
   setPage: (n) =>
-    set({ currentPage: n, pendingCalibration: null, pendingMatch: null, matchStatus: null }),
-  setTool: (tool) => set({ tool, pendingCalibration: null, pendingMatch: null }),
+    set({ currentPage: n, pendingCalibration: null, pendingMatchBoxes: [], matchStatus: null }),
+  setTool: (tool) => set({ tool, pendingCalibration: null, pendingMatchBoxes: [] }),
   setActiveTag: (activeTag) => set({ activeTag }),
   setZoom: (zoom) => set({ zoom: Math.min(8, Math.max(0.2, zoom)) }),
   setPendingCalibration: (pendingCalibration) => set({ pendingCalibration }),
-  setPendingMatch: (pendingMatch) => set({ pendingMatch }),
+  addPendingMatchBox: (box) =>
+    set((s) => ({ pendingMatchBoxes: [...s.pendingMatchBoxes, box] })),
+  clearPendingMatchBoxes: () => set({ pendingMatchBoxes: [] }),
 
   requestMatch: (tag) =>
     set((s) =>
-      s.pendingMatch
-        ? { matchRequest: { tag, box: s.pendingMatch }, pendingMatch: null }
+      s.pendingMatchBoxes.length > 0
+        ? { matchRequest: { tag, boxes: s.pendingMatchBoxes }, pendingMatchBoxes: [] }
         : {},
     ),
   clearMatchRequest: () => set({ matchRequest: null }),
   setMatchStatus: (matchStatus) => set({ matchStatus }),
 
   /**
-   * Install symbol-match results as the detection points for `tag` on the
-   * page: replaces any prior points for that tag, clears that tag's
-   * erasures, enables it, and gives it a color.
+   * Merge symbol-match results into `tag`'s detection points: appends only
+   * points not already present within `dedupeRadius` (so repeat runs top up
+   * the count without double-counting), preserving existing point indices so
+   * prior erasures stay valid. Enables the tag and assigns a color.
    */
-  setMatchedPoints: (pageNum, tag, points) =>
+  mergeMatchedPoints: (pageNum, tag, points, dedupeRadius) =>
     set((s) => {
       const page = s.pages[pageNum] ?? emptyPageState;
+      const existing = page.candidates.find((c) => c.tag === tag);
+      const merged = dedupeAppend(existing?.points ?? [], points, dedupeRadius);
       const candidates = [
         ...page.candidates.filter((c) => c.tag !== tag),
-        { tag, points },
+        { tag, points: merged },
       ].sort((a, b) => b.points.length - a.points.length || a.tag.localeCompare(b.tag));
       const tagColors = { ...s.tagColors };
       if (!(tag in tagColors)) {
@@ -181,14 +190,23 @@ export const useStore = create<TakeoffState>((set) => ({
             enabledTags: page.enabledTags.includes(tag)
               ? page.enabledTags
               : [...page.enabledTags, tag],
-            deletedAutoIds: page.deletedAutoIds.filter(
-              (id) => !id.startsWith(`auto:${tag}:`),
-            ),
           },
           pageNum,
         ),
         tagColors,
       };
+    }),
+
+  /** Remove a fixture type entirely: its points, markers, and erasures. */
+  removeTag: (tag) =>
+    set((s) => {
+      const page = getPage(s);
+      return patchPage(s, {
+        candidates: page.candidates.filter((c) => c.tag !== tag),
+        enabledTags: page.enabledTags.filter((t) => t !== tag),
+        deletedAutoIds: page.deletedAutoIds.filter((id) => !id.startsWith(`auto:${tag}:`)),
+        manualMarkers: page.manualMarkers.filter((m) => m.tag !== tag),
+      });
     }),
 
   setScale: (scale) => set((s) => patchPage(s, { scale })),
