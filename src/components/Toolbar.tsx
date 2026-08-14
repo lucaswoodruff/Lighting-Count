@@ -4,7 +4,8 @@ import { usePageState, useStore, type Tool } from '../state/store';
 const TOOLS: { id: Tool; label: string; title: string }[] = [
   { id: 'pan', label: 'Pan', title: 'Drag to pan, Ctrl+scroll to zoom' },
   { id: 'calibrate', label: 'Calibrate', title: 'Set scale from a known dimension' },
-  { id: 'area', label: 'Draw Area', title: 'Outline a space to measure and count' },
+  { id: 'area', label: 'Draw Area', title: 'Outline a space corner by corner' },
+  { id: 'rect', label: 'Rectangle', title: 'Drag a rectangular area' },
   { id: 'add', label: 'Add Fixture', title: 'Click to add a missed fixture' },
   { id: 'erase', label: 'Erase', title: 'Click a marker to remove it' },
 ];

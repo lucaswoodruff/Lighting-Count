@@ -18,12 +18,16 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
 
   const viewerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const renderChain = useRef<Promise<void>>(Promise.resolve());
+  const syncPending = useRef(false);
 
   const [pageDims, setPageDims] = useState<{ w: number; h: number } | null>(null);
+  const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const [draftPts, setDraftPts] = useState<Pt[]>([]);
   const [calStart, setCalStart] = useState<Pt | null>(null);
+  const [rectStart, setRectStart] = useState<Pt | null>(null);
   const [cursor, setCursor] = useState<Pt | null>(null);
 
   // Page size in page-space units, known before the bitmap finishes rendering
@@ -39,19 +43,25 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
     };
   }, [doc, currentPage]);
 
-  // Render the PDF bitmap; chained so renders never overlap.
+  // Render the PDF bitmap. Debounced so rapid zooming doesn't queue a full
+  // re-render per wheel tick (the canvas CSS-scales instantly in the
+  // meantime), chained so renders never overlap, and stale renders skipped.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     let cancelled = false;
-    renderChain.current = renderChain.current
-      .then(async () => {
-        if (cancelled) return;
-        await renderPage(doc, currentPage, zoom, canvas);
-      })
-      .catch((e) => console.error('PDF render failed:', e));
+    const timer = window.setTimeout(() => {
+      renderChain.current = renderChain.current
+        .then(async () => {
+          const st = useStore.getState();
+          if (cancelled || st.currentPage !== currentPage || st.zoom !== zoom) return;
+          await renderPage(doc, currentPage, zoom, canvas);
+        })
+        .catch((e) => console.error('PDF render failed:', e));
+    }, 150);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [doc, currentPage, zoom]);
 
@@ -59,7 +69,43 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
   useEffect(() => {
     setDraftPts([]);
     setCalStart(null);
+    setRectStart(null);
   }, [currentPage, tool]);
+
+  // The annotation stage is only as large as the visible viewport (a
+  // full-sheet stage at high zoom would need gigabytes of canvas buffer).
+  // It slides along with the scroll position; shapes stay in page space.
+  useEffect(() => {
+    const v = viewerRef.current;
+    if (!v) return;
+    const measure = () => setViewport({ w: v.clientWidth, h: v.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(v);
+    return () => ro.disconnect();
+  }, []);
+
+  function syncOverlay() {
+    syncPending.current = false;
+    const v = viewerRef.current;
+    const o = overlayRef.current;
+    const stage = stageRef.current;
+    if (!v || !o || !stage) return;
+    const sl = v.scrollLeft;
+    const st = v.scrollTop;
+    o.style.transform = `translate(${sl}px, ${st}px)`;
+    stage.position({ x: -sl, y: -st });
+    stage.batchDraw();
+  }
+
+  function onScroll() {
+    if (!syncPending.current) {
+      syncPending.current = true;
+      requestAnimationFrame(syncOverlay);
+    }
+  }
+
+  useLayoutEffect(syncOverlay);
 
   // Ctrl+wheel zoom anchored at the cursor (needs a non-passive listener).
   const anchorRef = useRef<{ ox: number; oy: number; oldZoom: number } | null>(null);
@@ -76,7 +122,9 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
         oy: e.clientY - rect.top,
         oldZoom: st.zoom,
       };
-      st.setZoom(st.zoom * (e.deltaY < 0 ? 1.2 : 1 / 1.2));
+      // Exponential factor: smooth for trackpad pinches (small deltas) and
+      // roughly a 1.2x step per mouse-wheel notch.
+      st.setZoom(st.zoom * Math.exp(-e.deltaY * 0.0018));
     };
     viewer.addEventListener('wheel', onWheel, { passive: false });
     return () => viewer.removeEventListener('wheel', onWheel);
@@ -98,6 +146,7 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
       if (e.key === 'Escape') {
         setDraftPts([]);
         setCalStart(null);
+        setRectStart(null);
         useStore.getState().setPendingCalibration(null);
       } else if (e.key === 'Enter' && draftPts.length >= 3) {
         useStore.getState().addArea(dedupe(draftPts));
@@ -135,10 +184,9 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
   }, []);
 
   function pointerPagePos(): Pt | null {
-    const stage = stageRef.current;
-    const pos = stage?.getPointerPosition();
-    if (!pos) return null;
-    return { x: pos.x / zoom, y: pos.y / zoom };
+    // Relative position inverts the stage's scroll offset and zoom scale,
+    // yielding page-space coordinates directly.
+    return stageRef.current?.getRelativePointerPosition() ?? null;
   }
 
   function onStageClick() {
@@ -186,7 +234,24 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
   }
 
   function onStageMouseMove() {
-    if (tool === 'area' || tool === 'calibrate') setCursor(pointerPagePos());
+    if (tool === 'area' || tool === 'calibrate' || tool === 'rect') {
+      setCursor(pointerPagePos());
+    }
+  }
+
+  function onStageMouseDown() {
+    if (tool !== 'rect') return;
+    setRectStart(pointerPagePos());
+  }
+
+  function onStageMouseUp() {
+    if (tool !== 'rect' || !rectStart) return;
+    const b = pointerPagePos();
+    setRectStart(null);
+    if (!b) return;
+    // Ignore accidental clicks — require a real drag in both directions.
+    if (Math.abs(b.x - rectStart.x) < 4 / zoom || Math.abs(b.y - rectStart.y) < 4 / zoom) return;
+    useStore.getState().addArea(rectCorners(rectStart, b));
   }
 
   function onMarkerClick(e: KonvaEventObject<MouseEvent>, id: string) {
@@ -205,20 +270,29 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
   const cursorStyle =
     tool === 'pan' ? (panRef.current ? 'grabbing' : 'grab') : 'crosshair';
 
+  const vpW = Math.min(viewport.w, w);
+  const vpH = Math.min(viewport.h, h);
+
   return (
-    <div className="viewer" ref={viewerRef} onMouseDown={onPanMouseDown}>
+    <div className="viewer" ref={viewerRef} onMouseDown={onPanMouseDown} onScroll={onScroll}>
       <div className="page-wrap" style={{ width: w, height: h }}>
-        <canvas ref={canvasRef} className="pdf-canvas" />
-        <div className="overlay" style={{ cursor: cursorStyle }}>
+        <canvas ref={canvasRef} className="pdf-canvas" style={{ width: w, height: h }} />
+        <div
+          className="overlay"
+          ref={overlayRef}
+          style={{ cursor: cursorStyle, width: vpW, height: vpH }}
+        >
           <Stage
             ref={stageRef}
-            width={w}
-            height={h}
+            width={vpW}
+            height={vpH}
             scaleX={zoom}
             scaleY={zoom}
             onClick={onStageClick}
             onDblClick={onStageDblClick}
             onMouseMove={onStageMouseMove}
+            onMouseDown={onStageMouseDown}
+            onMouseUp={onStageMouseUp}
           >
             {/* Completed areas */}
             <Layer listening={false}>
@@ -248,6 +322,17 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
                     <Circle key={i} x={p.x} y={p.y} radius={px(3.5)} fill="#1d4ed8" />
                   ))}
                 </>
+              )}
+              {/* Draft rectangle */}
+              {tool === 'rect' && rectStart && cursor && (
+                <Line
+                  points={flat(rectCorners(rectStart, cursor))}
+                  closed
+                  stroke="#1d4ed8"
+                  strokeWidth={px(1.5)}
+                  dash={[px(6), px(4)]}
+                  fill="rgba(37, 99, 235, 0.08)"
+                />
               )}
               {/* Calibration line */}
               {tool === 'calibrate' && calStart && cursor && (
@@ -334,6 +419,15 @@ function AreaShapeView({
 
 function flat(pts: Pt[]): number[] {
   return pts.flatMap((p) => [p.x, p.y]);
+}
+
+function rectCorners(a: Pt, b: Pt): Pt[] {
+  return [
+    { x: a.x, y: a.y },
+    { x: b.x, y: a.y },
+    { x: b.x, y: b.y },
+    { x: a.x, y: b.y },
+  ];
 }
 
 function centroid(pts: Pt[]): Pt {

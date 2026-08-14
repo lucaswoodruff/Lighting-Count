@@ -31,6 +31,13 @@ export interface RenderResult {
  * Render a page into `canvas` at `zoom` (1 = 100%), sharp on hi-DPI screens.
  * Returns sizes; the caller sizes the annotation overlay to match.
  */
+/**
+ * Cap on rendered bitmap pixels. Large sheets at deep zoom would otherwise
+ * exceed browser canvas limits and fail to render (blank page); past the cap
+ * the bitmap is rendered coarser and CSS-scaled up instead.
+ */
+const MAX_RENDER_PIXELS = 32_000_000;
+
 export async function renderPage(
   doc: PDFDocumentProxy,
   pageNum: number,
@@ -40,17 +47,20 @@ export async function renderPage(
   const page = await doc.getPage(pageNum);
   const base = page.getViewport({ scale: 1 });
   const dpr = window.devicePixelRatio || 1;
-  const viewport = page.getViewport({ scale: zoom * dpr });
+  let scale = zoom * dpr;
+  const maxScale = Math.sqrt(MAX_RENDER_PIXELS / (base.width * base.height));
+  if (scale > maxScale) scale = maxScale;
+  const viewport = page.getViewport({ scale });
   canvas.width = Math.floor(viewport.width);
   canvas.height = Math.floor(viewport.height);
-  canvas.style.width = `${Math.floor(viewport.width / dpr)}px`;
-  canvas.style.height = `${Math.floor(viewport.height / dpr)}px`;
+  // CSS size is owned by the component (set synchronously from zoom), so the
+  // page rescales instantly while this bitmap catches up.
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2D context unavailable');
   await page.render({ canvasContext: ctx, viewport }).promise;
   return {
-    cssWidth: Math.floor(viewport.width / dpr),
-    cssHeight: Math.floor(viewport.height / dpr),
+    cssWidth: Math.floor((base.width * zoom)),
+    cssHeight: Math.floor((base.height * zoom)),
     pageWidth: base.width,
     pageHeight: base.height,
   };

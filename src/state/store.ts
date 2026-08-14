@@ -4,7 +4,7 @@ import type { TagCandidate } from '../core/detect';
 import { pointInPolygon } from '../core/geometry';
 import { areaSquareFeet } from '../core/scale';
 
-export type Tool = 'pan' | 'calibrate' | 'area' | 'add' | 'erase';
+export type Tool = 'pan' | 'calibrate' | 'area' | 'rect' | 'add' | 'erase';
 
 export interface PageState {
   scale: ScaleSetting | null;

@@ -289,7 +289,10 @@ button {
 
 .viewer .overlay {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+  will-change: transform;
 }
 
 /* ---- landing ---- */

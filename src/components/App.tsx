@@ -84,6 +84,9 @@ function HintBar() {
       hint =
         'Draw area: click each corner of the space. Double-click or press Enter to close. Esc cancels.';
       break;
+    case 'rect':
+      hint = 'Rectangle: press the mouse at one corner, drag, and release at the opposite corner.';
+      break;
     case 'add':
       hint = activeTag
         ? `Add fixture: each click places one "${activeTag}" marker. Choose a different type in the toolbar.`
