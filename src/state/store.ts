@@ -145,7 +145,16 @@ export const useStore = create<TakeoffState>((set) => ({
     set({ fileName: null, numPages: 0, pageLabels: [], pages: {}, pendingCalibration: null }),
 
   setPage: (n) =>
-    set({ currentPage: n, pendingCalibration: null, pendingMatchBoxes: [], matchStatus: null }),
+    set({
+      currentPage: n,
+      // activeTag is effectively per-sheet: a tag confirmed on the old sheet
+      // may not be enabled on the new one, and markers for a non-enabled tag
+      // are invisible. Clear it so Add Fixture always starts from a valid pick.
+      activeTag: null,
+      pendingCalibration: null,
+      pendingMatchBoxes: [],
+      matchStatus: null,
+    }),
   setTool: (tool) => set({ tool, pendingCalibration: null, pendingMatchBoxes: [] }),
   setActiveTag: (activeTag) => set({ activeTag }),
   setZoom: (zoom) => set({ zoom: Math.min(8, Math.max(0.2, zoom)) }),
@@ -252,7 +261,14 @@ export const useStore = create<TakeoffState>((set) => ({
     set((s) => {
       const page = getPage(s);
       const marker: Marker = { id: nextId('manual'), tag, pt, source: 'manual' };
-      return patchPage(s, { manualMarkers: [...page.manualMarkers, marker] });
+      return patchPage(s, {
+        manualMarkers: [...page.manualMarkers, marker],
+        // A stored marker must never be invisible: effectiveMarkers only
+        // surfaces tags in enabledTags, so enable the tag on this page too.
+        enabledTags: page.enabledTags.includes(tag)
+          ? page.enabledTags
+          : [...page.enabledTags, tag],
+      });
     }),
 
   eraseMarker: (id) =>
