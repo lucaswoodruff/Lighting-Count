@@ -42,6 +42,8 @@ export interface PendingMatch {
 export interface MatchRequest {
   tag: string;
   boxes: PendingMatch[];
+  /** NCC score cutoff: lower finds more (looser), higher fewer (stricter). */
+  threshold: number;
 }
 
 interface TakeoffState {
@@ -69,7 +71,7 @@ interface TakeoffState {
   setPendingCalibration(p: PendingCalibration | null): void;
   addPendingMatchBox(p: PendingMatch): void;
   clearPendingMatchBoxes(): void;
-  requestMatch(tag: string): void;
+  requestMatch(tag: string, threshold: number): void;
   clearMatchRequest(): void;
   setMatchStatus(s: string | null): void;
   mergeMatchedPoints(page: number, tag: string, points: Pt[], dedupeRadius: number): void;
@@ -163,10 +165,13 @@ export const useStore = create<TakeoffState>((set) => ({
     set((s) => ({ pendingMatchBoxes: [...s.pendingMatchBoxes, box] })),
   clearPendingMatchBoxes: () => set({ pendingMatchBoxes: [] }),
 
-  requestMatch: (tag) =>
+  requestMatch: (tag, threshold) =>
     set((s) =>
       s.pendingMatchBoxes.length > 0
-        ? { matchRequest: { tag, boxes: s.pendingMatchBoxes }, pendingMatchBoxes: [] }
+        ? {
+            matchRequest: { tag, boxes: s.pendingMatchBoxes, threshold },
+            pendingMatchBoxes: [],
+          }
         : {},
     ),
   clearMatchRequest: () => set({ matchRequest: null }),

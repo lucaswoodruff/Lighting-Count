@@ -35,9 +35,10 @@ export interface RenderResult {
 /**
  * Cap on rendered bitmap pixels. Large sheets at deep zoom would otherwise
  * exceed browser canvas limits and fail to render (blank page); past the cap
- * the bitmap is rendered coarser and CSS-scaled up instead.
+ * the bitmap is rendered coarser and CSS-scaled up instead. 16M keeps us
+ * under Safari's ~16.7M canvas-area ceiling — the strictest mainstream limit.
  */
-const MAX_RENDER_PIXELS = 32_000_000;
+const MAX_RENDER_PIXELS = 16_000_000;
 
 export async function renderPage(
   doc: PDFDocumentProxy,
@@ -74,11 +75,17 @@ export interface GrayRender {
 }
 
 const MAX_MATCH_DIM = 4096;
+/**
+ * At MAX_MATCH_DIM a sheet's gray raster is ~40 MB of Float32Array, so the
+ * cache is a small LRU rather than unbounded: 3 pages covers the common
+ * "match, flip to the adjacent sheet, come back" pattern.
+ */
+const GRAY_CACHE_PAGES = 3;
 const grayCache = new WeakMap<PDFDocumentProxy, Map<number, GrayRender>>();
 
 /**
  * Rasterize a page to grayscale for symbol matching. Cached per document
- * and page — matching may run several times per sheet.
+ * (LRU of GRAY_CACHE_PAGES) — matching may run several times per sheet.
  */
 export async function renderPageGray(
   doc: PDFDocumentProxy,
@@ -90,7 +97,12 @@ export async function renderPageGray(
     grayCache.set(doc, pages);
   }
   const cached = pages.get(pageNum);
-  if (cached) return cached;
+  if (cached) {
+    // Refresh recency (Map preserves insertion order).
+    pages.delete(pageNum);
+    pages.set(pageNum, cached);
+    return cached;
+  }
 
   const page = await doc.getPage(pageNum);
   const base = page.getViewport({ scale: 1 });
@@ -110,6 +122,9 @@ export async function renderPageGray(
     scale,
   };
   pages.set(pageNum, result);
+  while (pages.size > GRAY_CACHE_PAGES) {
+    pages.delete(pages.keys().next().value!); // evict least recently used
+  }
   return result;
 }
 

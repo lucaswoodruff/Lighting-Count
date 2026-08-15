@@ -55,7 +55,7 @@ export default function App() {
   const matchRequest = useStore((s) => s.matchRequest);
   useEffect(() => {
     if (!matchRequest || !doc) return;
-    const { tag, boxes } = matchRequest;
+    const { tag, boxes, threshold } = matchRequest;
     const st = useStore.getState();
     const pageNum = st.currentPage;
     st.setMatchStatus(
@@ -73,7 +73,11 @@ export default function App() {
         const w = Math.abs(box.b.x - box.a.x) * scale;
         const h = Math.abs(box.b.y - box.a.y) * scale;
         const tpl = crop(gray, x, y, w, h);
-        sets.push({ matches: matchTemplate(gray, tpl, 0.8), tplW: tpl.width, tplH: tpl.height });
+        sets.push({
+          matches: matchTemplate(gray, tpl, threshold),
+          tplW: tpl.width,
+          tplH: tpl.height,
+        });
         if (cancelled) return;
       }
       const merged = mergeMatchSets(sets);

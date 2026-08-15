@@ -241,11 +241,12 @@ function MatchControls() {
   const requestMatch = useStore((s) => s.requestMatch);
   const clearPendingMatchBoxes = useStore((s) => s.clearPendingMatchBoxes);
   const [matchTag, setMatchTag] = useState('');
+  const [threshold, setThreshold] = useState(0.8);
 
   function run() {
     const tag = matchTag.trim().toUpperCase();
     if (!tag) return;
-    requestMatch(tag);
+    requestMatch(tag, threshold);
     setMatchTag('');
   }
 
@@ -268,6 +269,15 @@ function MatchControls() {
               onChange={(e) => setMatchTag(e.target.value.toUpperCase())}
               onKeyDown={(e) => e.key === 'Enter' && run()}
             />
+            <select
+              value={threshold}
+              title="Match strictness — loosen for faint scans, tighten if it over-matches"
+              onChange={(e) => setThreshold(Number(e.target.value))}
+            >
+              <option value={0.7}>Loose</option>
+              <option value={0.8}>Normal</option>
+              <option value={0.9}>Strict</option>
+            </select>
             <button className="primary" disabled={!matchTag.trim()} onClick={run}>
               Find matches
             </button>
