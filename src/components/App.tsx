@@ -3,6 +3,7 @@ import { findTagCandidates } from '../core/detect';
 import { detectScales } from '../core/scaleDetect';
 import { crop } from '../core/match';
 import type { MatchWorkRequest, MatchWorkResponse } from '../workers/matchWorker';
+import { looksLikeSchedulePage, parseSchedule } from '../core/schedule';
 import { detectSheetNumber } from '../core/sheetLabel';
 import {
   extractTextItems,
@@ -51,6 +52,28 @@ export default function App() {
         /* IndexedDB unavailable (private mode etc.) — run without persistence */
       }
       startAutosave(key);
+
+      // Find the fixture schedule (types, engineer's counts, watts) in the
+      // background. First clean parse wins; schedule text stays on-device.
+      void (async () => {
+        for (let p = 1; p <= d.numPages; p++) {
+          const st = useStore.getState();
+          if (st.fileName !== file.name) return;
+          if (st.schedule.length > 0) return;
+          try {
+            const items = await extractTextItems(d, p);
+            if (!looksLikeSchedulePage(items)) continue;
+            const entries = parseSchedule(items);
+            if (entries.length > 0) {
+              const s2 = useStore.getState();
+              s2.setSchedule(entries, s2.pageLabels[p - 1] ?? `Page ${p}`);
+              return;
+            }
+          } catch {
+            /* skip unparseable pages */
+          }
+        }
+      })();
 
       // No embedded labels ("Page N" fallback): resolve sheet numbers from
       // each sheet's titleblock text in the background. The dropdown fills

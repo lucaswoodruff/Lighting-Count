@@ -7,7 +7,7 @@ import {
   scaleFromCalibration,
   scaleFromRatio,
 } from '../core/scale';
-import { computeResults, usePageState, useStore } from '../state/store';
+import { computeResults, effectiveMarkers, usePageState, useStore } from '../state/store';
 
 export default function SidePanel() {
   return (
@@ -181,11 +181,17 @@ function ScaleSection() {
 function TagSection() {
   const page = usePageState();
   const tagColors = useStore((s) => s.tagColors);
+  const schedule = useStore((s) => s.schedule);
+  const schedulePageLabel = useStore((s) => s.schedulePageLabel);
   const toggleTag = useStore((s) => s.toggleTag);
   const addCustomTag = useStore((s) => s.addCustomTag);
   const removeTag = useStore((s) => s.removeTag);
   const [showAll, setShowAll] = useState(false);
   const [newTag, setNewTag] = useState('');
+
+  // Schedule types not yet present on this sheet — the escape hatch for
+  // numeric type codes (7, 10R) that text detection can never propose.
+  const unseeded = schedule.filter((e) => !page.candidates.some((c) => c.tag === e.type));
 
   const shown = showAll ? page.candidates : page.candidates.slice(0, 25);
 
@@ -201,6 +207,17 @@ function TagSection() {
           No candidate tags found on this sheet. If the drawing's text isn't real text
           (outlined CAD text or a scan), use the Match Symbol tool: box one example fixture
           and the app finds all identical symbols.
+        </div>
+      )}
+      {schedule.length > 0 && unseeded.length > 0 && (
+        <div className="note">
+          Fixture schedule found on {schedulePageLabel}: {schedule.length} types.{' '}
+          <button
+            title="Add each schedule type as a fixture type on this sheet — then place markers with Match Symbol or Add Fixture"
+            onClick={() => unseeded.forEach((e) => addCustomTag(e.type))}
+          >
+            Seed {unseeded.length} types
+          </button>
         </div>
       )}
       <MatchControls />
@@ -340,9 +357,32 @@ function ResultsSection() {
   const deleteArea = useStore((s) => s.deleteArea);
 
   const pages = useStore((s) => s.pages);
+  const schedule = useStore((s) => s.schedule);
 
   const results = useMemo(() => computeResults(page), [page]);
   const tags = page.enabledTags;
+
+  // Schedule watts per type (for connected-load export columns).
+  const wattsByType = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const e of schedule) if (e.watts !== undefined) map[e.type] = e.watts;
+    return Object.keys(map).length > 0 ? map : undefined;
+  }, [schedule]);
+
+  // Cross-check: total placed markers per type across ALL sheets vs the
+  // engineer's own schedule count. A mismatch is a note, never a correction.
+  const crossChecks = useMemo(() => {
+    const counted = new Map<string, number>();
+    for (const p of Object.values(pages)) {
+      for (const m of effectiveMarkers(p)) {
+        counted.set(m.tag, (counted.get(m.tag) ?? 0) + 1);
+      }
+    }
+    return schedule
+      .filter((e) => e.scheduleCount !== undefined && (counted.get(e.type) ?? 0) > 0)
+      .map((e) => ({ type: e.type, expected: e.scheduleCount!, counted: counted.get(e.type)! }))
+      .filter((c) => c.expected !== c.counted);
+  }, [pages, schedule]);
 
   // Every sheet with at least one drawn area, in page order — the export unit.
   const sheetsWithAreas = useMemo(
@@ -369,14 +409,20 @@ function ResultsSection() {
           tags: p.enabledTags,
         })),
         { fileName: fileName ?? 'drawing.pdf', exportedAt: new Date() },
+        wattsByType,
       );
     } else {
-      downloadXlsx(results, tags, {
-        fileName: fileName ?? 'drawing.pdf',
-        pageLabel: pageLabels[currentPage - 1] ?? `Page ${currentPage}`,
-        scaleLabel: page.scale?.label ?? 'not set',
-        exportedAt: new Date(),
-      });
+      downloadXlsx(
+        results,
+        tags,
+        {
+          fileName: fileName ?? 'drawing.pdf',
+          pageLabel: pageLabels[currentPage - 1] ?? `Page ${currentPage}`,
+          scaleLabel: page.scale?.label ?? 'not set',
+          exportedAt: new Date(),
+        },
+        wattsByType,
+      );
     }
   }
 
@@ -442,6 +488,15 @@ function ResultsSection() {
             </tfoot>
           )}
         </table>
+      )}
+      {crossChecks.length > 0 && (
+        <div className="note">
+          Schedule cross-check:{' '}
+          {crossChecks
+            .map((c) => `${c.type} — schedule says ${c.expected}, you counted ${c.counted}`)
+            .join('; ')}
+          . Partial-building takeoffs will differ; whole-building ones shouldn't.
+        </div>
       )}
       <div className="row" style={{ marginTop: 8 }}>
         <button

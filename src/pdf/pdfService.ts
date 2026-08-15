@@ -142,13 +142,16 @@ export async function extractTextItems(
   const items: PageTextItem[] = [];
   for (const item of content.items) {
     if (!('str' in item) || item.str.trim().length === 0) continue;
-    const tx = item.transform[4];
-    const ty = item.transform[5];
-    // Center of the item's box in PDF user space (y-up), then into page space.
-    const [x, y] = viewport.convertToViewportPoint(
-      tx + item.width / 2,
-      ty + item.height / 2,
-    );
+    const [a, b, c, d, tx, ty] = item.transform;
+    // Center of the item's box in PDF user space (y-up), then into page
+    // space. width runs along the baseline direction (a,b) and height along
+    // (c,d) — advancing along raw axes instead would misplace rotated text
+    // (titleblocks and rotated schedule tables are common on drawings).
+    const wLen = Math.hypot(a, b) || 1;
+    const hLen = Math.hypot(c, d) || 1;
+    const cx = tx + ((a / wLen) * item.width + (c / hLen) * item.height) / 2;
+    const cy = ty + ((b / wLen) * item.width + (d / hLen) * item.height) / 2;
+    const [x, y] = viewport.convertToViewportPoint(cx, cy);
     items.push({ str: item.str, center: { x, y } });
   }
   return items;

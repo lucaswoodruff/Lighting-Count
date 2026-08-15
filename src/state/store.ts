@@ -5,6 +5,7 @@ import { pointInPolygon } from '../core/geometry';
 import { dedupeAppend } from '../core/match';
 import { areaSquareFeet } from '../core/scale';
 import type { DetectedScale } from '../core/scaleDetect';
+import type { ScheduleEntry } from '../core/schedule';
 
 export type Tool = 'pan' | 'calibrate' | 'area' | 'rect' | 'match' | 'add' | 'erase';
 
@@ -65,10 +66,15 @@ interface TakeoffState {
   matchRequest: MatchRequest | null;
   matchStatus: string | null;
   pages: Record<number, PageState>;
+  /** Parsed fixture schedule for the document (types, counts, watts). */
+  schedule: ScheduleEntry[];
+  /** Which sheet the schedule was found on. */
+  schedulePageLabel: string | null;
 
   setDocument(fileName: string, numPages: number, pageLabels: string[]): void;
   setPageLabel(page: number, label: string): void;
   restoreSession(pages: Record<number, PageState>, tagColors: Record<string, string>): void;
+  setSchedule(schedule: ScheduleEntry[], schedulePageLabel: string | null): void;
   replacePages(pages: Record<number, PageState>): void;
   closeDocument(): void;
   setPage(n: number): void;
@@ -146,6 +152,8 @@ export const useStore = create<TakeoffState>((set) => ({
   matchRequest: null,
   matchStatus: null,
   pages: {},
+  schedule: [],
+  schedulePageLabel: null,
 
   setDocument: (fileName, numPages, pageLabels) =>
     set({
@@ -162,7 +170,11 @@ export const useStore = create<TakeoffState>((set) => ({
       pendingMatchBoxes: [],
       matchRequest: null,
       matchStatus: null,
+      schedule: [],
+      schedulePageLabel: null,
     }),
+
+  setSchedule: (schedule, schedulePageLabel) => set({ schedule, schedulePageLabel }),
 
   /**
    * Reattach a saved takeoff to the just-opened document. Bumps the id

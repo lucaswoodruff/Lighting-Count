@@ -70,3 +70,36 @@ describe('buildMultiSheetRows', () => {
     expect(rows[6][2]).toBe('');
   });
 });
+
+describe('wattage columns', () => {
+  it('adds Connected W and W/sf when schedule watts are provided', () => {
+    const rows = buildExportRows(
+      [result('Office', 100, { '7': 3, '10R': 2 })],
+      ['7', '10R'],
+      meta,
+      { '7': 33, '10R': 32 },
+    );
+    expect(rows[6]).toEqual([
+      'Area', 'Square Feet', '7', '10R', 'Total Fixtures', 'Connected W', 'W/sf',
+    ]);
+    // 3*33 + 2*32 = 163 W over 100 sf
+    expect(rows[7]).toEqual(['Office', 100, 3, 2, 5, 163, 1.63]);
+  });
+
+  it('omits the columns without watts (existing format unchanged)', () => {
+    const rows = buildExportRows([result('Office', 100, { A: 1 })], ['A'], meta);
+    expect(rows[6]).toEqual(['Area', 'Square Feet', 'A', 'Total Fixtures']);
+  });
+
+  it('multi-sheet export carries the same columns and totals them', () => {
+    const rows = buildMultiSheetRows(
+      [
+        { label: 'E1', results: [result('A1', 100, { '7': 1 })], tags: ['7'] },
+        { label: 'E2', results: [result('B1', 100, { '7': 2 })], tags: ['7'] },
+      ],
+      { fileName: 'p.pdf', exportedAt: new Date(2026, 7, 14) },
+      { '7': 33 },
+    );
+    expect(rows.at(-1)).toEqual(['TOTAL', '', 200, 3, 3, 99, 0.5]);
+  });
+});

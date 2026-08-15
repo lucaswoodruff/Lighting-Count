@@ -9,8 +9,13 @@ import {
 import type { AreaResult } from '../types';
 
 /** Build the workbook and trigger a browser download. */
-export function downloadXlsx(results: AreaResult[], tags: string[], meta: ExportMeta): void {
-  const rows = buildExportRows(results, tags, meta);
+export function downloadXlsx(
+  results: AreaResult[],
+  tags: string[],
+  meta: ExportMeta,
+  wattsByType?: Record<string, number>,
+): void {
+  const rows = buildExportRows(results, tags, meta, wattsByType);
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws['!cols'] = [
     { wch: 26 },
@@ -28,8 +33,9 @@ export function downloadXlsx(results: AreaResult[], tags: string[], meta: Export
 export function downloadMultiSheetXlsx(
   sheets: SheetResults[],
   meta: MultiSheetMeta,
+  wattsByType?: Record<string, number>,
 ): void {
-  const rows = buildMultiSheetRows(sheets, meta);
+  const rows = buildMultiSheetRows(sheets, meta, wattsByType);
   const ws = XLSX.utils.aoa_to_sheet(rows);
   const tagCount = rows[5].length - 4; // Sheet, Area, SF, ...tags, Total
   ws['!cols'] = [
