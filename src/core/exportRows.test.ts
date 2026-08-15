@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildExportRows } from './exportRows';
+import { buildExportRows, buildMultiSheetRows } from './exportRows';
 import type { AreaResult } from '../types';
 
 const meta = {
@@ -43,5 +43,30 @@ describe('buildExportRows', () => {
     expect(rows[1]).toEqual(['Drawing file', 'plan.pdf']);
     expect(rows[2]).toEqual(['Sheet', 'E2.1']);
     expect(rows[3]).toEqual(['Scale', '1/8" = 1\'-0"']);
+  });
+});
+
+describe('buildMultiSheetRows', () => {
+  it('unions tag columns across sheets and adds a Sheet column', () => {
+    const rows = buildMultiSheetRows(
+      [
+        { label: 'E2.1', results: [result('Office', 100, { A: 2 })], tags: ['A'] },
+        { label: 'E2.2', results: [result('Lab', 200, { B: 3 })], tags: ['B'] },
+      ],
+      { fileName: 'plan.pdf', exportedAt: new Date(2026, 7, 14) },
+    );
+    const header = rows[5];
+    expect(header).toEqual(['Sheet', 'Area', 'Square Feet', 'A', 'B', 'Total Fixtures']);
+    expect(rows[6]).toEqual(['E2.1', 'Office', 100, 2, 0, 2]);
+    expect(rows[7]).toEqual(['E2.2', 'Lab', 200, 0, 3, 3]);
+    expect(rows[8]).toEqual(['TOTAL', '', 300, 2, 3, 5]);
+  });
+
+  it('leaves square footage blank for sheets without a scale', () => {
+    const rows = buildMultiSheetRows(
+      [{ label: 'E2.1', results: [result('Office', NaN, { A: 1 })], tags: ['A'] }],
+      { fileName: 'plan.pdf', exportedAt: new Date(2026, 7, 14) },
+    );
+    expect(rows[6][2]).toBe('');
   });
 });

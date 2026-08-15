@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { downloadXlsx } from '../core/exportXlsx';
+import { downloadMultiSheetXlsx, downloadXlsx } from '../core/exportXlsx';
 import {
   COMMON_SCALES,
   impliedFeetPerPaperInch,
@@ -24,7 +24,9 @@ export default function SidePanel() {
 function ScaleSection() {
   const page = usePageState();
   const pending = useStore((s) => s.pendingCalibration);
+  const numPages = useStore((s) => s.numPages);
   const setScale = useStore((s) => s.setScale);
+  const applyScaleToAllPages = useStore((s) => s.applyScaleToAllPages);
   const setTool = useStore((s) => s.setTool);
   const setPendingCalibration = useStore((s) => s.setPendingCalibration);
   const [calLength, setCalLength] = useState('');
@@ -61,6 +63,19 @@ function ScaleSection() {
       {page.scale ? (
         <div className="scale-current">
           {page.scale.label}
+          {numPages > 1 && (
+            <button
+              style={{ marginLeft: 8 }}
+              title="Use this scale on every sheet of the set (per-sheet scales can still be changed afterwards)"
+              onClick={() => {
+                if (window.confirm('Apply this scale to all sheets? Existing per-sheet scales will be replaced.')) {
+                  applyScaleToAllPages();
+                }
+              }}
+            >
+              All sheets
+            </button>
+          )}
           {page.scale.source === 'calibration' && (
             <div className="note">
               ≈ {impliedFeetPerPaperInch(page.scale).toFixed(1)} ft per plotted inch
@@ -324,10 +339,46 @@ function ResultsSection() {
   const renameArea = useStore((s) => s.renameArea);
   const deleteArea = useStore((s) => s.deleteArea);
 
+  const pages = useStore((s) => s.pages);
+
   const results = useMemo(() => computeResults(page), [page]);
   const tags = page.enabledTags;
 
-  const canExport = results.length > 0 && page.scale !== null;
+  // Every sheet with at least one drawn area, in page order — the export unit.
+  const sheetsWithAreas = useMemo(
+    () =>
+      Object.entries(pages)
+        .map(([n, p]) => ({ n: Number(n), p }))
+        .filter(({ p }) => p.areas.length > 0)
+        .sort((a, b) => a.n - b.n),
+    [pages],
+  );
+
+  const canExport = sheetsWithAreas.length > 0 && page.scale !== null;
+  const exportLabel =
+    sheetsWithAreas.length > 1
+      ? `Export ${sheetsWithAreas.length} sheets to Excel`
+      : 'Export to Excel';
+
+  function exportAll() {
+    if (sheetsWithAreas.length > 1) {
+      downloadMultiSheetXlsx(
+        sheetsWithAreas.map(({ n, p }) => ({
+          label: pageLabels[n - 1] ?? `Page ${n}`,
+          results: computeResults(p),
+          tags: p.enabledTags,
+        })),
+        { fileName: fileName ?? 'drawing.pdf', exportedAt: new Date() },
+      );
+    } else {
+      downloadXlsx(results, tags, {
+        fileName: fileName ?? 'drawing.pdf',
+        pageLabel: pageLabels[currentPage - 1] ?? `Page ${currentPage}`,
+        scaleLabel: page.scale?.label ?? 'not set',
+        exportedAt: new Date(),
+      });
+    }
+  }
 
   return (
     <section>
@@ -397,16 +448,9 @@ function ResultsSection() {
           className="primary"
           disabled={!canExport}
           title={canExport ? 'Download .xlsx' : 'Draw at least one area and set the scale first'}
-          onClick={() =>
-            downloadXlsx(results, tags, {
-              fileName: fileName ?? 'drawing.pdf',
-              pageLabel: pageLabels[currentPage - 1] ?? `Page ${currentPage}`,
-              scaleLabel: page.scale?.label ?? 'not set',
-              exportedAt: new Date(),
-            })
-          }
+          onClick={exportAll}
         >
-          Export to Excel
+          {exportLabel}
         </button>
       </div>
     </section>

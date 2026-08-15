@@ -143,3 +143,20 @@ describe('computeResults', () => {
     expect(results[0].counts.A + results[1].counts.A).toBe(2);
   });
 });
+
+describe('applyScaleToAllPages', () => {
+  it('copies the current scale to every page, visited or not', () => {
+    const st = useStore.getState();
+    st.setScale({ feetPerUnit: 0.2, label: 'x', source: 'ratio' });
+    useStore.getState().applyScaleToAllPages();
+    const s = useStore.getState();
+    for (let p = 1; p <= s.numPages; p++) {
+      expect(s.pages[p]?.scale?.label).toBe('x');
+    }
+  });
+
+  it('does nothing when the current sheet has no scale', () => {
+    useStore.getState().applyScaleToAllPages();
+    expect(useStore.getState().pages[2]?.scale ?? null).toBeNull();
+  });
+});

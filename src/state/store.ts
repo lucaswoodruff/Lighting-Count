@@ -82,6 +82,7 @@ interface TakeoffState {
   mergeMatchedPoints(page: number, tag: string, points: Pt[], dedupeRadius: number): void;
   removeTag(tag: string): void;
   setScale(scale: ScaleSetting): void;
+  applyScaleToAllPages(): void;
   setCandidates(page: number, candidates: TagCandidate[]): void;
   setDetectedScales(page: number, detectedScales: DetectedScale[]): void;
   toggleTag(tag: string): void;
@@ -237,6 +238,18 @@ export const useStore = create<TakeoffState>((set) => ({
     }),
 
   setScale: (scale) => set((s) => patchPage(s, { scale })),
+
+  /** Copy the current sheet's scale to every page of the document. */
+  applyScaleToAllPages: () =>
+    set((s) => {
+      const scale = getPage(s).scale;
+      if (!scale) return {};
+      const pages = { ...s.pages };
+      for (let p = 1; p <= s.numPages; p++) {
+        pages[p] = { ...(pages[p] ?? emptyPageState), scale };
+      }
+      return { pages };
+    }),
 
   setCandidates: (page, candidates) => set((s) => patchPage(s, { candidates }, page)),
 
