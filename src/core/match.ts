@@ -101,6 +101,18 @@ export function matchTemplate(image: GrayImage, tpl: GrayImage, threshold = 0.8)
   return results.slice(0, 3000);
 }
 
+/** Rotate 90 degrees clockwise: (x, y) -> (h-1-y, x). */
+export function rotate90(img: GrayImage): GrayImage {
+  const out = new Float32Array(img.width * img.height);
+  const w = img.height; // rotated width
+  for (let y = 0; y < img.height; y++) {
+    for (let x = 0; x < img.width; x++) {
+      out[x * w + (img.height - 1 - y)] = img.data[y * img.width + x];
+    }
+  }
+  return { data: out, width: w, height: img.width };
+}
+
 export interface TemplateMatchSet {
   matches: Match[];
   tplW: number;

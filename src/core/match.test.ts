@@ -5,6 +5,7 @@ import {
   downsample,
   matchTemplate,
   mergeMatchSets,
+  rotate90,
   toGray,
   type GrayImage,
 } from './match';
@@ -136,5 +137,44 @@ describe('dedupeAppend', () => {
     expect(out[2]).toEqual({ x: 80, y: 80 });
     // existing points keep their positions (indices stay stable for erasures)
     expect(out[0]).toEqual({ x: 10, y: 10 });
+  });
+});
+
+describe('rotate90', () => {
+  it('swaps dimensions and lands pixels where expected', () => {
+    // 2x1 image [a, b] -> 1x2 image [a; b] rotated clockwise
+    const img = { data: new Float32Array([10, 20]), width: 2, height: 1 };
+    const r = rotate90(img);
+    expect(r.width).toBe(1);
+    expect(r.height).toBe(2);
+    expect([...r.data]).toEqual([10, 20]);
+  });
+
+  it('four rotations are the identity', () => {
+    const img = makePage(30, 20, [[5, 4]]);
+    let r = img;
+    for (let i = 0; i < 4; i++) r = rotate90(r);
+    expect(r.width).toBe(img.width);
+    expect([...r.data]).toEqual([...img.data]);
+  });
+
+  it('finds a rotated copy when matching rotated templates', () => {
+    // One upright glyph and one 90-degree-rotated glyph on the same page.
+    const img = makePage(200, 200, [[20, 20]]);
+    const glyph = crop(img, 20, 20, 16, 12);
+    const rotated = rotate90(glyph);
+    // Stamp the rotated glyph at (120, 120).
+    for (let y = 0; y < rotated.height; y++)
+      for (let x = 0; x < rotated.width; x++)
+        img.data[(120 + y) * img.width + (120 + x)] = rotated.data[y * rotated.width + x];
+
+    const sets = [];
+    let tpl = glyph;
+    for (let rot = 0; rot < 4; rot++) {
+      sets.push({ matches: matchTemplate(img, tpl, 0.85), tplW: tpl.width, tplH: tpl.height });
+      tpl = rotate90(tpl);
+    }
+    const merged = mergeMatchSets(sets);
+    expect(merged.length).toBe(2);
   });
 });

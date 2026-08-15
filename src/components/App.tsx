@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { findTagCandidates } from '../core/detect';
 import { detectScales } from '../core/scaleDetect';
-import { crop, matchTemplate, mergeMatchSets } from '../core/match';
+import { crop } from '../core/match';
+import type { MatchWorkRequest, MatchWorkResponse } from '../workers/matchWorker';
 import { detectSheetNumber } from '../core/sheetLabel';
 import {
   extractTextItems,
@@ -127,43 +128,57 @@ export default function App() {
       `Searching for "${tag}" using ${boxes.length} example${boxes.length > 1 ? 's' : ''}…`,
     );
     let cancelled = false;
+    let worker: Worker | null = null;
     (async () => {
-      // Let the status line paint before the heavy correlation loop.
-      await new Promise((r) => setTimeout(r, 30));
       const { gray, scale } = await renderPageGray(doc, pageNum);
-      const sets = [];
-      for (const box of boxes) {
-        const x = Math.min(box.a.x, box.b.x) * scale;
-        const y = Math.min(box.a.y, box.b.y) * scale;
-        const w = Math.abs(box.b.x - box.a.x) * scale;
-        const h = Math.abs(box.b.y - box.a.y) * scale;
-        const tpl = crop(gray, x, y, w, h);
-        sets.push({
-          matches: matchTemplate(gray, tpl, threshold),
-          tplW: tpl.width,
-          tplH: tpl.height,
-        });
-        if (cancelled) return;
-      }
-      const merged = mergeMatchSets(sets);
-      const points = merged.map((m) => ({ x: m.center.x / scale, y: m.center.y / scale }));
-      // Points closer together than ~60% of the smallest example are the
-      // same fixture — in page units for the store-level merge.
-      const dedupeRadius =
-        (Math.min(...sets.map((s) => Math.min(s.tplW, s.tplH))) * 0.6) / scale;
-      const s2 = useStore.getState();
-      const before =
-        s2.pages[pageNum]?.candidates.find((c) => c.tag === tag)?.points.length ?? 0;
-      s2.mergeMatchedPoints(pageNum, tag, points, dedupeRadius);
-      const after =
-        useStore.getState().pages[pageNum]?.candidates.find((c) => c.tag === tag)?.points
-          .length ?? 0;
-      s2.setMatchStatus(
-        before > 0
-          ? `Found ${points.length} match(es); ${after - before} new — now ${after} × ${tag}.`
-          : `Found ${after} × ${tag}. Box a missed one and run again to top up, or erase extras.`,
+      if (cancelled) return;
+      const templates = boxes.map((box) =>
+        crop(
+          gray,
+          Math.min(box.a.x, box.b.x) * scale,
+          Math.min(box.a.y, box.b.y) * scale,
+          Math.abs(box.b.x - box.a.x) * scale,
+          Math.abs(box.b.y - box.a.y) * scale,
+        ),
       );
-      s2.clearMatchRequest();
+      // Correlation runs off the main thread; each template is also matched
+      // at 90-degree rotations, so rotated placements come back in one run.
+      worker = new Worker(new URL('../workers/matchWorker.ts', import.meta.url), {
+        type: 'module',
+      });
+      worker.onmessage = (ev: MessageEvent<MatchWorkResponse>) => {
+        const msg = ev.data;
+        const s2 = useStore.getState();
+        if (msg.type === 'progress') {
+          s2.setMatchStatus(`Searching for "${tag}"… ${msg.done}/${msg.total}`);
+          return;
+        }
+        if (msg.type === 'error') {
+          s2.setMatchStatus(`Match failed: ${msg.message}`);
+          s2.clearMatchRequest();
+          return;
+        }
+        const points = msg.matches.map((m) => ({
+          x: m.center.x / scale,
+          y: m.center.y / scale,
+        }));
+        // Points closer together than ~60% of the smallest example are the
+        // same fixture — in page units for the store-level merge.
+        const dedupeRadius = (msg.minTplDim * 0.6) / scale;
+        const before =
+          s2.pages[pageNum]?.candidates.find((c) => c.tag === tag)?.points.length ?? 0;
+        s2.mergeMatchedPoints(pageNum, tag, points, dedupeRadius);
+        const after =
+          useStore.getState().pages[pageNum]?.candidates.find((c) => c.tag === tag)?.points
+            .length ?? 0;
+        s2.setMatchStatus(
+          before > 0
+            ? `Found ${points.length} match(es); ${after - before} new — now ${after} × ${tag}.`
+            : `Found ${after} × ${tag}. Box a missed one and run again to top up, or erase extras.`,
+        );
+        s2.clearMatchRequest();
+      };
+      worker.postMessage({ image: gray, templates, threshold } satisfies MatchWorkRequest);
     })().catch((e) => {
       const s2 = useStore.getState();
       s2.setMatchStatus(`Match failed: ${e instanceof Error ? e.message : e}`);
@@ -171,6 +186,7 @@ export default function App() {
     });
     return () => {
       cancelled = true;
+      worker?.terminate(); // page switch / new request / unmount cancels the run
     };
   }, [matchRequest, doc]);
 
