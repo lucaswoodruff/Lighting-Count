@@ -70,11 +70,18 @@ interface TakeoffState {
   schedule: ScheduleEntry[];
   /** Which sheet the schedule was found on. */
   schedulePageLabel: string | null;
+  /**
+   * Sheet whose text says "fixture schedule" but whose table isn't
+   * machine-readable (outlined/scanned) — surfaced so the silent parse
+   * failure becomes a visible explanation.
+   */
+  scheduleUnreadableLabel: string | null;
 
   setDocument(fileName: string, numPages: number, pageLabels: string[]): void;
   setPageLabel(page: number, label: string): void;
   restoreSession(pages: Record<number, PageState>, tagColors: Record<string, string>): void;
   setSchedule(schedule: ScheduleEntry[], schedulePageLabel: string | null): void;
+  setScheduleUnreadable(label: string | null): void;
   replacePages(pages: Record<number, PageState>): void;
   closeDocument(): void;
   setPage(n: number): void;
@@ -154,6 +161,7 @@ export const useStore = create<TakeoffState>((set) => ({
   pages: {},
   schedule: [],
   schedulePageLabel: null,
+  scheduleUnreadableLabel: null,
 
   setDocument: (fileName, numPages, pageLabels) =>
     set({
@@ -172,9 +180,12 @@ export const useStore = create<TakeoffState>((set) => ({
       matchStatus: null,
       schedule: [],
       schedulePageLabel: null,
+      scheduleUnreadableLabel: null,
     }),
 
-  setSchedule: (schedule, schedulePageLabel) => set({ schedule, schedulePageLabel }),
+  setSchedule: (schedule, schedulePageLabel) =>
+    set({ schedule, schedulePageLabel, scheduleUnreadableLabel: null }),
+  setScheduleUnreadable: (scheduleUnreadableLabel) => set({ scheduleUnreadableLabel }),
 
   /**
    * Reattach a saved takeoff to the just-opened document. Bumps the id

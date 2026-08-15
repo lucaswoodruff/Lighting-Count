@@ -183,6 +183,7 @@ function TagSection() {
   const tagColors = useStore((s) => s.tagColors);
   const schedule = useStore((s) => s.schedule);
   const schedulePageLabel = useStore((s) => s.schedulePageLabel);
+  const scheduleUnreadableLabel = useStore((s) => s.scheduleUnreadableLabel);
   const toggleTag = useStore((s) => s.toggleTag);
   const addCustomTag = useStore((s) => s.addCustomTag);
   const removeTag = useStore((s) => s.removeTag);
@@ -207,6 +208,14 @@ function TagSection() {
           No candidate tags found on this sheet. If the drawing's text isn't real text
           (outlined CAD text or a scan), use the Match Symbol tool: box one example fixture
           and the app finds all identical symbols.
+        </div>
+      )}
+      {scheduleUnreadableLabel && (
+        <div className="note">
+          A fixture schedule was found on {scheduleUnreadableLabel}, but its text isn't
+          machine-readable (outlined CAD text or a scan), so types, schedule counts, and
+          wattages can't be read from it. Add types manually below and place them with
+          Match Symbol.
         </div>
       )}
       {schedule.length > 0 && unseeded.length > 0 && (

@@ -56,6 +56,7 @@ export default function App() {
       // Find the fixture schedule (types, engineer's counts, watts) in the
       // background. First clean parse wins; schedule text stays on-device.
       void (async () => {
+        let unreadablePage: number | null = null;
         for (let p = 1; p <= d.numPages; p++) {
           const st = useStore.getState();
           if (st.fileName !== file.name) return;
@@ -69,8 +70,20 @@ export default function App() {
               s2.setSchedule(entries, s2.pageLabels[p - 1] ?? `Page ${p}`);
               return;
             }
+            // The sheet SAYS "fixture schedule" but its table didn't parse —
+            // outlined/scanned text. Remember it so the user learns why the
+            // schedule features are absent instead of failing silently.
+            unreadablePage ??= p;
           } catch {
             /* skip unparseable pages */
+          }
+        }
+        if (unreadablePage !== null) {
+          const s2 = useStore.getState();
+          if (s2.fileName === file.name && s2.schedule.length === 0) {
+            s2.setScheduleUnreadable(
+              s2.pageLabels[unreadablePage - 1] ?? `Page ${unreadablePage}`,
+            );
           }
         }
       })();
