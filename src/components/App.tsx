@@ -11,7 +11,9 @@ import {
   renderPageGray,
   type PDFDocumentProxy,
 } from '../pdf/pdfService';
+import { clearSession, loadSession, sessionKey, startAutosave } from '../state/persist';
 import { useStore } from '../state/store';
+import { startUndoTracking, undo } from '../state/undo';
 import Landing from './Landing';
 import PdfViewer from './PdfViewer';
 import SidePanel from './SidePanel';
@@ -31,6 +33,23 @@ export default function App() {
       const labels = await getPageLabels(d);
       setDoc(d);
       useStore.getState().setDocument(file.name, d.numPages, labels);
+
+      // Reattach a previous session for this document, if one was autosaved.
+      const key = sessionKey(file.name, file.size);
+      try {
+        const saved = await loadSession(key);
+        if (saved && Object.keys(saved.pages).length > 0) {
+          const when = new Date(saved.savedAt).toLocaleString();
+          if (window.confirm(`Restore your saved takeoff for this drawing (from ${when})?`)) {
+            useStore.getState().restoreSession(saved.pages, saved.tagColors);
+          } else {
+            void clearSession(key);
+          }
+        }
+      } catch {
+        /* IndexedDB unavailable (private mode etc.) — run without persistence */
+      }
+      startAutosave(key);
 
       // No embedded labels ("Page N" fallback): resolve sheet numbers from
       // each sheet's titleblock text in the background. The dropdown fills
@@ -57,6 +76,24 @@ export default function App() {
     } catch (e) {
       setError(`Could not open "${file.name}": ${e instanceof Error ? e.message : e}`);
     }
+  }, []);
+
+  // Undo: record page-state changes for the session; Ctrl/Cmd+Z reverts.
+  useEffect(() => {
+    const unsub = startUndoTracking();
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+        e.preventDefault();
+        undo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      unsub();
+      window.removeEventListener('keydown', onKey);
+    };
   }, []);
 
   // Run tag + scale-notation detection once per visited page.

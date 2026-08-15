@@ -68,6 +68,8 @@ interface TakeoffState {
 
   setDocument(fileName: string, numPages: number, pageLabels: string[]): void;
   setPageLabel(page: number, label: string): void;
+  restoreSession(pages: Record<number, PageState>, tagColors: Record<string, string>): void;
+  replacePages(pages: Record<number, PageState>): void;
   closeDocument(): void;
   setPage(n: number): void;
   setTool(t: Tool): void;
@@ -103,6 +105,18 @@ const PALETTE = [
 let idCounter = 0;
 function nextId(prefix: string): string {
   return `${prefix}:${++idCounter}`;
+}
+
+/** Highest numeric suffix among restored `manual:`/`area:` ids. */
+function maxIdIn(pages: Record<number, PageState>): number {
+  let max = 0;
+  for (const p of Object.values(pages)) {
+    for (const id of [...p.manualMarkers.map((m) => m.id), ...p.areas.map((a) => a.id)]) {
+      const n = parseInt(id.split(':')[1], 10);
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+  }
+  return max;
 }
 
 function getPage(s: TakeoffState, n?: number): PageState {
@@ -149,6 +163,19 @@ export const useStore = create<TakeoffState>((set) => ({
       matchRequest: null,
       matchStatus: null,
     }),
+
+  /**
+   * Reattach a saved takeoff to the just-opened document. Bumps the id
+   * counter past every restored id so new markers/areas can't collide.
+   */
+  restoreSession: (pages, tagColors) =>
+    set(() => {
+      idCounter = Math.max(idCounter, maxIdIn(pages));
+      return { pages, tagColors };
+    }),
+
+  /** Replace all page state wholesale (undo). */
+  replacePages: (pages) => set({ pages }),
 
   setPageLabel: (page, label) =>
     set((s) => {

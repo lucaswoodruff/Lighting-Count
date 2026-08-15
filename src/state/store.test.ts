@@ -160,3 +160,43 @@ describe('applyScaleToAllPages', () => {
     expect(useStore.getState().pages[2]?.scale ?? null).toBeNull();
   });
 });
+
+describe('restoreSession + undo', () => {
+  it('restored ids never collide with new ones', async () => {
+    const st = useStore.getState();
+    st.restoreSession(
+      {
+        1: {
+          ...emptyPageState,
+          manualMarkers: [{ id: 'manual:41', tag: 'A', pt: { x: 1, y: 1 }, source: 'manual' as const }],
+          areas: [{ id: 'area:97', name: 'Old', pts: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }] }],
+          enabledTags: ['A'],
+        },
+      },
+      { A: '#fff' },
+    );
+    useStore.getState().addManualMarker('A', { x: 2, y: 2 });
+    useStore.getState().addArea([{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 2, y: 2 }]);
+    const p = useStore.getState().pages[1];
+    const ids = [...p.manualMarkers.map((m) => m.id), ...p.areas.map((a) => a.id)];
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('undo reverts the latest page-state change', async () => {
+    const { startUndoTracking, undo, undoDepth } = await import('./undo');
+    const unsub = startUndoTracking();
+    try {
+      const st = useStore.getState();
+      st.addManualMarker('A', { x: 1, y: 1 });
+      useStore.getState().eraseMarker(useStore.getState().pages[1].manualMarkers[0].id);
+      expect(useStore.getState().pages[1].manualMarkers).toHaveLength(0);
+      undo(); // revert the erase
+      expect(useStore.getState().pages[1].manualMarkers).toHaveLength(1);
+      undo(); // revert the add
+      expect(useStore.getState().pages[1]?.manualMarkers ?? []).toHaveLength(0);
+      expect(undoDepth()).toBe(0);
+    } finally {
+      unsub();
+    }
+  });
+});
