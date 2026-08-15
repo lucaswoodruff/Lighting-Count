@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { findTagCandidates } from '../core/detect';
+import { detectScales } from '../core/scaleDetect';
 import { crop, matchTemplate, mergeMatchSets } from '../core/match';
 import {
   extractTextItems,
@@ -33,7 +34,7 @@ export default function App() {
     }
   }, []);
 
-  // Run tag detection once per visited page.
+  // Run tag + scale-notation detection once per visited page.
   useEffect(() => {
     if (!doc) return;
     const st = useStore.getState();
@@ -42,7 +43,9 @@ export default function App() {
     extractTextItems(doc, currentPage)
       .then((items) => {
         if (!cancelled) {
-          useStore.getState().setCandidates(currentPage, findTagCandidates(items));
+          const s = useStore.getState();
+          s.setCandidates(currentPage, findTagCandidates(items));
+          s.setDetectedScales(currentPage, detectScales(items));
         }
       })
       .catch(console.error);

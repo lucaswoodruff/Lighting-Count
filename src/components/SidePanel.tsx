@@ -71,6 +71,23 @@ function ScaleSection() {
         <div className="warn">No scale set for this sheet — areas can't be computed yet.</div>
       )}
 
+      {!page.scale && page.detectedScales.length > 0 && (
+        <div className="note">
+          Found on this sheet:
+          {page.detectedScales.slice(0, 3).map((d) => (
+            <div key={d.label} className="row">
+              <span>
+                {d.label}
+                {d.occurrences > 1 ? ` ×${d.occurrences}` : ''}
+              </span>
+              <button onClick={() => applyRatio(d.paperInches, d.realFeet, d.label)}>
+                Use
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="row">
         <select
           value=""

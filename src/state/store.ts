@@ -4,6 +4,7 @@ import type { TagCandidate } from '../core/detect';
 import { pointInPolygon } from '../core/geometry';
 import { dedupeAppend } from '../core/match';
 import { areaSquareFeet } from '../core/scale';
+import type { DetectedScale } from '../core/scaleDetect';
 
 export type Tool = 'pan' | 'calibrate' | 'area' | 'rect' | 'match' | 'add' | 'erase';
 
@@ -16,6 +17,8 @@ export interface PageState {
   deletedAutoIds: string[];
   manualMarkers: Marker[];
   areas: AreaShape[];
+  /** Scale notations found in this sheet's text, most frequent first. */
+  detectedScales: DetectedScale[];
 }
 
 export const emptyPageState: PageState = {
@@ -25,6 +28,7 @@ export const emptyPageState: PageState = {
   deletedAutoIds: [],
   manualMarkers: [],
   areas: [],
+  detectedScales: [],
 };
 
 /** Pending calibration line waiting for the user to enter its real length. */
@@ -78,6 +82,7 @@ interface TakeoffState {
   removeTag(tag: string): void;
   setScale(scale: ScaleSetting): void;
   setCandidates(page: number, candidates: TagCandidate[]): void;
+  setDetectedScales(page: number, detectedScales: DetectedScale[]): void;
   toggleTag(tag: string): void;
   addCustomTag(tag: string): void;
   addManualMarker(tag: string, pt: Pt): void;
@@ -226,6 +231,9 @@ export const useStore = create<TakeoffState>((set) => ({
   setScale: (scale) => set((s) => patchPage(s, { scale })),
 
   setCandidates: (page, candidates) => set((s) => patchPage(s, { candidates }, page)),
+
+  setDetectedScales: (page, detectedScales) =>
+    set((s) => patchPage(s, { detectedScales }, page)),
 
   toggleTag: (tag) =>
     set((s) => {
