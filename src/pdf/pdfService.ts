@@ -153,3 +153,13 @@ export async function extractTextItems(
   }
   return items;
 }
+
+/** Page size in page-space units (rotation applied), for layout-aware heuristics. */
+export async function getPageDims(
+  doc: PDFDocumentProxy,
+  pageNum: number,
+): Promise<{ width: number; height: number }> {
+  const page = await doc.getPage(pageNum);
+  const vp = page.getViewport({ scale: 1 });
+  return { width: vp.width, height: vp.height };
+}

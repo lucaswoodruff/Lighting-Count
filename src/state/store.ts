@@ -67,6 +67,7 @@ interface TakeoffState {
   pages: Record<number, PageState>;
 
   setDocument(fileName: string, numPages: number, pageLabels: string[]): void;
+  setPageLabel(page: number, label: string): void;
   closeDocument(): void;
   setPage(n: number): void;
   setTool(t: Tool): void;
@@ -146,6 +147,13 @@ export const useStore = create<TakeoffState>((set) => ({
       pendingMatchBoxes: [],
       matchRequest: null,
       matchStatus: null,
+    }),
+
+  setPageLabel: (page, label) =>
+    set((s) => {
+      const pageLabels = [...s.pageLabels];
+      pageLabels[page - 1] = label;
+      return { pageLabels };
     }),
 
   closeDocument: () =>

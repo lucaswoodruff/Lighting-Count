@@ -2,8 +2,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { findTagCandidates } from '../core/detect';
 import { detectScales } from '../core/scaleDetect';
 import { crop, matchTemplate, mergeMatchSets } from '../core/match';
+import { detectSheetNumber } from '../core/sheetLabel';
 import {
   extractTextItems,
+  getPageDims,
   getPageLabels,
   loadPdf,
   renderPageGray,
@@ -29,6 +31,29 @@ export default function App() {
       const labels = await getPageLabels(d);
       setDoc(d);
       useStore.getState().setDocument(file.name, d.numPages, labels);
+
+      // No embedded labels ("Page N" fallback): resolve sheet numbers from
+      // each sheet's titleblock text in the background. The dropdown fills
+      // in as pages resolve; failures keep the fallback.
+      const isFallback = labels.every((l, i) => l === `Page ${i + 1}`);
+      if (isFallback) {
+        void (async () => {
+          for (let p = 1; p <= d.numPages; p++) {
+            const st = useStore.getState();
+            if (st.fileName !== file.name) return; // a different doc was opened
+            try {
+              const [items, dims] = await Promise.all([
+                extractTextItems(d, p),
+                getPageDims(d, p),
+              ]);
+              const sheet = detectSheetNumber(items, dims.width, dims.height);
+              if (sheet) useStore.getState().setPageLabel(p, sheet);
+            } catch {
+              /* keep "Page N" for this page */
+            }
+          }
+        })();
+      }
     } catch (e) {
       setError(`Could not open "${file.name}": ${e instanceof Error ? e.message : e}`);
     }
