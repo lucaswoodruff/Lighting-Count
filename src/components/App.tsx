@@ -1,14 +1,21 @@
 import { useCallback, useEffect, useState } from 'react';
 import { findTagCandidates } from '../core/detect';
-import { crop, matchTemplate, mergeMatchSets } from '../core/match';
+import { detectScales } from '../core/scaleDetect';
+import { crop } from '../core/match';
+import type { MatchWorkRequest, MatchWorkResponse } from '../workers/matchWorker';
+import { looksLikeSchedulePage, parseSchedule } from '../core/schedule';
+import { detectSheetNumber } from '../core/sheetLabel';
 import {
   extractTextItems,
+  getPageDims,
   getPageLabels,
   loadPdf,
   renderPageGray,
   type PDFDocumentProxy,
 } from '../pdf/pdfService';
+import { clearSession, loadSession, sessionKey, startAutosave } from '../state/persist';
 import { useStore } from '../state/store';
+import { startUndoTracking, undo } from '../state/undo';
 import Landing from './Landing';
 import PdfViewer from './PdfViewer';
 import SidePanel from './SidePanel';
@@ -28,12 +35,105 @@ export default function App() {
       const labels = await getPageLabels(d);
       setDoc(d);
       useStore.getState().setDocument(file.name, d.numPages, labels);
+
+      // Reattach a previous session for this document, if one was autosaved.
+      const key = sessionKey(file.name, file.size);
+      try {
+        const saved = await loadSession(key);
+        if (saved && Object.keys(saved.pages).length > 0) {
+          const when = new Date(saved.savedAt).toLocaleString();
+          if (window.confirm(`Restore your saved takeoff for this drawing (from ${when})?`)) {
+            useStore.getState().restoreSession(saved.pages, saved.tagColors);
+          } else {
+            void clearSession(key);
+          }
+        }
+      } catch {
+        /* IndexedDB unavailable (private mode etc.) — run without persistence */
+      }
+      startAutosave(key);
+
+      // Find the fixture schedule (types, engineer's counts, watts) in the
+      // background. First clean parse wins; schedule text stays on-device.
+      void (async () => {
+        let unreadablePage: number | null = null;
+        for (let p = 1; p <= d.numPages; p++) {
+          const st = useStore.getState();
+          if (st.fileName !== file.name) return;
+          if (st.schedule.length > 0) return;
+          try {
+            const items = await extractTextItems(d, p);
+            if (!looksLikeSchedulePage(items)) continue;
+            const entries = parseSchedule(items);
+            if (entries.length > 0) {
+              const s2 = useStore.getState();
+              s2.setSchedule(entries, s2.pageLabels[p - 1] ?? `Page ${p}`);
+              return;
+            }
+            // The sheet SAYS "fixture schedule" but its table didn't parse —
+            // outlined/scanned text. Remember it so the user learns why the
+            // schedule features are absent instead of failing silently.
+            unreadablePage ??= p;
+          } catch {
+            /* skip unparseable pages */
+          }
+        }
+        if (unreadablePage !== null) {
+          const s2 = useStore.getState();
+          if (s2.fileName === file.name && s2.schedule.length === 0) {
+            s2.setScheduleUnreadable(
+              s2.pageLabels[unreadablePage - 1] ?? `Page ${unreadablePage}`,
+            );
+          }
+        }
+      })();
+
+      // No embedded labels ("Page N" fallback): resolve sheet numbers from
+      // each sheet's titleblock text in the background. The dropdown fills
+      // in as pages resolve; failures keep the fallback.
+      const isFallback = labels.every((l, i) => l === `Page ${i + 1}`);
+      if (isFallback) {
+        void (async () => {
+          for (let p = 1; p <= d.numPages; p++) {
+            const st = useStore.getState();
+            if (st.fileName !== file.name) return; // a different doc was opened
+            try {
+              const [items, dims] = await Promise.all([
+                extractTextItems(d, p),
+                getPageDims(d, p),
+              ]);
+              const sheet = detectSheetNumber(items, dims.width, dims.height);
+              if (sheet) useStore.getState().setPageLabel(p, sheet);
+            } catch {
+              /* keep "Page N" for this page */
+            }
+          }
+        })();
+      }
     } catch (e) {
       setError(`Could not open "${file.name}": ${e instanceof Error ? e.message : e}`);
     }
   }, []);
 
-  // Run tag detection once per visited page.
+  // Undo: record page-state changes for the session; Ctrl/Cmd+Z reverts.
+  useEffect(() => {
+    const unsub = startUndoTracking();
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+        e.preventDefault();
+        undo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      unsub();
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
+
+  // Run tag + scale-notation detection once per visited page.
   useEffect(() => {
     if (!doc) return;
     const st = useStore.getState();
@@ -42,7 +142,9 @@ export default function App() {
     extractTextItems(doc, currentPage)
       .then((items) => {
         if (!cancelled) {
-          useStore.getState().setCandidates(currentPage, findTagCandidates(items));
+          const s = useStore.getState();
+          s.setCandidates(currentPage, findTagCandidates(items));
+          s.setDetectedScales(currentPage, detectScales(items));
         }
       })
       .catch(console.error);
@@ -55,46 +157,64 @@ export default function App() {
   const matchRequest = useStore((s) => s.matchRequest);
   useEffect(() => {
     if (!matchRequest || !doc) return;
-    const { tag, boxes } = matchRequest;
+    const { tag, boxes, threshold } = matchRequest;
     const st = useStore.getState();
     const pageNum = st.currentPage;
     st.setMatchStatus(
       `Searching for "${tag}" using ${boxes.length} example${boxes.length > 1 ? 's' : ''}…`,
     );
     let cancelled = false;
+    let worker: Worker | null = null;
     (async () => {
-      // Let the status line paint before the heavy correlation loop.
-      await new Promise((r) => setTimeout(r, 30));
       const { gray, scale } = await renderPageGray(doc, pageNum);
-      const sets = [];
-      for (const box of boxes) {
-        const x = Math.min(box.a.x, box.b.x) * scale;
-        const y = Math.min(box.a.y, box.b.y) * scale;
-        const w = Math.abs(box.b.x - box.a.x) * scale;
-        const h = Math.abs(box.b.y - box.a.y) * scale;
-        const tpl = crop(gray, x, y, w, h);
-        sets.push({ matches: matchTemplate(gray, tpl, 0.8), tplW: tpl.width, tplH: tpl.height });
-        if (cancelled) return;
-      }
-      const merged = mergeMatchSets(sets);
-      const points = merged.map((m) => ({ x: m.center.x / scale, y: m.center.y / scale }));
-      // Points closer together than ~60% of the smallest example are the
-      // same fixture — in page units for the store-level merge.
-      const dedupeRadius =
-        (Math.min(...sets.map((s) => Math.min(s.tplW, s.tplH))) * 0.6) / scale;
-      const s2 = useStore.getState();
-      const before =
-        s2.pages[pageNum]?.candidates.find((c) => c.tag === tag)?.points.length ?? 0;
-      s2.mergeMatchedPoints(pageNum, tag, points, dedupeRadius);
-      const after =
-        useStore.getState().pages[pageNum]?.candidates.find((c) => c.tag === tag)?.points
-          .length ?? 0;
-      s2.setMatchStatus(
-        before > 0
-          ? `Found ${points.length} match(es); ${after - before} new — now ${after} × ${tag}.`
-          : `Found ${after} × ${tag}. Box a missed one and run again to top up, or erase extras.`,
+      if (cancelled) return;
+      const templates = boxes.map((box) =>
+        crop(
+          gray,
+          Math.min(box.a.x, box.b.x) * scale,
+          Math.min(box.a.y, box.b.y) * scale,
+          Math.abs(box.b.x - box.a.x) * scale,
+          Math.abs(box.b.y - box.a.y) * scale,
+        ),
       );
-      s2.clearMatchRequest();
+      // Correlation runs off the main thread; each template is also matched
+      // at 90-degree rotations, so rotated placements come back in one run.
+      worker = new Worker(new URL('../workers/matchWorker.ts', import.meta.url), {
+        type: 'module',
+      });
+      worker.onmessage = (ev: MessageEvent<MatchWorkResponse>) => {
+        const msg = ev.data;
+        const s2 = useStore.getState();
+        if (msg.type === 'progress') {
+          s2.setMatchStatus(`Searching for "${tag}"… ${msg.done}/${msg.total}`);
+          return;
+        }
+        if (msg.type === 'error') {
+          s2.setMatchStatus(`Match failed: ${msg.message}`);
+          s2.clearMatchRequest();
+          return;
+        }
+        const points = msg.matches.map((m) => ({
+          x: m.center.x / scale,
+          y: m.center.y / scale,
+        }));
+        // Points closer together than ~60% of the smallest example are the
+        // same fixture — in page units for the store-level merge.
+        const dedupeRadius = (msg.minTplDim * 0.6) / scale;
+        const before =
+          s2.pages[pageNum]?.candidates.find((c) => c.tag === tag)?.points.length ?? 0;
+        s2.mergeMatchedPoints(pageNum, tag, points, dedupeRadius);
+        const after =
+          useStore.getState().pages[pageNum]?.candidates.find((c) => c.tag === tag)?.points
+            .length ?? 0;
+        s2.setMatchStatus(
+          before > 0
+            ? `Found ${points.length} match(es); ${after - before} new — now ${after} × ${tag}.`
+            : `Found ${after} × ${tag}. Box a missed one and run again to top up, or erase extras.`,
+        );
+        s2.clearMatchRequest();
+      };
+      worker.postMessage({ image: gray, templates, threshold } satisfies MatchWorkRequest);
     })().catch((e) => {
       const s2 = useStore.getState();
       s2.setMatchStatus(`Match failed: ${e instanceof Error ? e.message : e}`);
@@ -102,6 +222,7 @@ export default function App() {
     });
     return () => {
       cancelled = true;
+      worker?.terminate(); // page switch / new request / unmount cancels the run
     };
   }, [matchRequest, doc]);
 

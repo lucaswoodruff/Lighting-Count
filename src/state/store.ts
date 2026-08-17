@@ -4,6 +4,8 @@ import type { TagCandidate } from '../core/detect';
 import { pointInPolygon } from '../core/geometry';
 import { dedupeAppend } from '../core/match';
 import { areaSquareFeet } from '../core/scale';
+import type { DetectedScale } from '../core/scaleDetect';
+import type { ScheduleEntry } from '../core/schedule';
 
 export type Tool = 'pan' | 'calibrate' | 'area' | 'rect' | 'match' | 'add' | 'erase';
 
@@ -16,6 +18,8 @@ export interface PageState {
   deletedAutoIds: string[];
   manualMarkers: Marker[];
   areas: AreaShape[];
+  /** Scale notations found in this sheet's text, most frequent first. */
+  detectedScales: DetectedScale[];
 }
 
 export const emptyPageState: PageState = {
@@ -25,6 +29,7 @@ export const emptyPageState: PageState = {
   deletedAutoIds: [],
   manualMarkers: [],
   areas: [],
+  detectedScales: [],
 };
 
 /** Pending calibration line waiting for the user to enter its real length. */
@@ -42,6 +47,8 @@ export interface PendingMatch {
 export interface MatchRequest {
   tag: string;
   boxes: PendingMatch[];
+  /** NCC score cutoff: lower finds more (looser), higher fewer (stricter). */
+  threshold: number;
 }
 
 interface TakeoffState {
@@ -59,8 +66,23 @@ interface TakeoffState {
   matchRequest: MatchRequest | null;
   matchStatus: string | null;
   pages: Record<number, PageState>;
+  /** Parsed fixture schedule for the document (types, counts, watts). */
+  schedule: ScheduleEntry[];
+  /** Which sheet the schedule was found on. */
+  schedulePageLabel: string | null;
+  /**
+   * Sheet whose text says "fixture schedule" but whose table isn't
+   * machine-readable (outlined/scanned) — surfaced so the silent parse
+   * failure becomes a visible explanation.
+   */
+  scheduleUnreadableLabel: string | null;
 
   setDocument(fileName: string, numPages: number, pageLabels: string[]): void;
+  setPageLabel(page: number, label: string): void;
+  restoreSession(pages: Record<number, PageState>, tagColors: Record<string, string>): void;
+  setSchedule(schedule: ScheduleEntry[], schedulePageLabel: string | null): void;
+  setScheduleUnreadable(label: string | null): void;
+  replacePages(pages: Record<number, PageState>): void;
   closeDocument(): void;
   setPage(n: number): void;
   setTool(t: Tool): void;
@@ -69,13 +91,15 @@ interface TakeoffState {
   setPendingCalibration(p: PendingCalibration | null): void;
   addPendingMatchBox(p: PendingMatch): void;
   clearPendingMatchBoxes(): void;
-  requestMatch(tag: string): void;
+  requestMatch(tag: string, threshold: number): void;
   clearMatchRequest(): void;
   setMatchStatus(s: string | null): void;
   mergeMatchedPoints(page: number, tag: string, points: Pt[], dedupeRadius: number): void;
   removeTag(tag: string): void;
   setScale(scale: ScaleSetting): void;
+  applyScaleToAllPages(): void;
   setCandidates(page: number, candidates: TagCandidate[]): void;
+  setDetectedScales(page: number, detectedScales: DetectedScale[]): void;
   toggleTag(tag: string): void;
   addCustomTag(tag: string): void;
   addManualMarker(tag: string, pt: Pt): void;
@@ -94,6 +118,18 @@ const PALETTE = [
 let idCounter = 0;
 function nextId(prefix: string): string {
   return `${prefix}:${++idCounter}`;
+}
+
+/** Highest numeric suffix among restored `manual:`/`area:` ids. */
+function maxIdIn(pages: Record<number, PageState>): number {
+  let max = 0;
+  for (const p of Object.values(pages)) {
+    for (const id of [...p.manualMarkers.map((m) => m.id), ...p.areas.map((a) => a.id)]) {
+      const n = parseInt(id.split(':')[1], 10);
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+  }
+  return max;
 }
 
 function getPage(s: TakeoffState, n?: number): PageState {
@@ -123,6 +159,9 @@ export const useStore = create<TakeoffState>((set) => ({
   matchRequest: null,
   matchStatus: null,
   pages: {},
+  schedule: [],
+  schedulePageLabel: null,
+  scheduleUnreadableLabel: null,
 
   setDocument: (fileName, numPages, pageLabels) =>
     set({
@@ -139,13 +178,49 @@ export const useStore = create<TakeoffState>((set) => ({
       pendingMatchBoxes: [],
       matchRequest: null,
       matchStatus: null,
+      schedule: [],
+      schedulePageLabel: null,
+      scheduleUnreadableLabel: null,
+    }),
+
+  setSchedule: (schedule, schedulePageLabel) =>
+    set({ schedule, schedulePageLabel, scheduleUnreadableLabel: null }),
+  setScheduleUnreadable: (scheduleUnreadableLabel) => set({ scheduleUnreadableLabel }),
+
+  /**
+   * Reattach a saved takeoff to the just-opened document. Bumps the id
+   * counter past every restored id so new markers/areas can't collide.
+   */
+  restoreSession: (pages, tagColors) =>
+    set(() => {
+      idCounter = Math.max(idCounter, maxIdIn(pages));
+      return { pages, tagColors };
+    }),
+
+  /** Replace all page state wholesale (undo). */
+  replacePages: (pages) => set({ pages }),
+
+  setPageLabel: (page, label) =>
+    set((s) => {
+      const pageLabels = [...s.pageLabels];
+      pageLabels[page - 1] = label;
+      return { pageLabels };
     }),
 
   closeDocument: () =>
     set({ fileName: null, numPages: 0, pageLabels: [], pages: {}, pendingCalibration: null }),
 
   setPage: (n) =>
-    set({ currentPage: n, pendingCalibration: null, pendingMatchBoxes: [], matchStatus: null }),
+    set({
+      currentPage: n,
+      // activeTag is effectively per-sheet: a tag confirmed on the old sheet
+      // may not be enabled on the new one, and markers for a non-enabled tag
+      // are invisible. Clear it so Add Fixture always starts from a valid pick.
+      activeTag: null,
+      pendingCalibration: null,
+      pendingMatchBoxes: [],
+      matchStatus: null,
+    }),
   setTool: (tool) => set({ tool, pendingCalibration: null, pendingMatchBoxes: [] }),
   setActiveTag: (activeTag) => set({ activeTag }),
   setZoom: (zoom) => set({ zoom: Math.min(8, Math.max(0.2, zoom)) }),
@@ -154,10 +229,13 @@ export const useStore = create<TakeoffState>((set) => ({
     set((s) => ({ pendingMatchBoxes: [...s.pendingMatchBoxes, box] })),
   clearPendingMatchBoxes: () => set({ pendingMatchBoxes: [] }),
 
-  requestMatch: (tag) =>
+  requestMatch: (tag, threshold) =>
     set((s) =>
       s.pendingMatchBoxes.length > 0
-        ? { matchRequest: { tag, boxes: s.pendingMatchBoxes }, pendingMatchBoxes: [] }
+        ? {
+            matchRequest: { tag, boxes: s.pendingMatchBoxes, threshold },
+            pendingMatchBoxes: [],
+          }
         : {},
     ),
   clearMatchRequest: () => set({ matchRequest: null }),
@@ -211,7 +289,22 @@ export const useStore = create<TakeoffState>((set) => ({
 
   setScale: (scale) => set((s) => patchPage(s, { scale })),
 
+  /** Copy the current sheet's scale to every page of the document. */
+  applyScaleToAllPages: () =>
+    set((s) => {
+      const scale = getPage(s).scale;
+      if (!scale) return {};
+      const pages = { ...s.pages };
+      for (let p = 1; p <= s.numPages; p++) {
+        pages[p] = { ...(pages[p] ?? emptyPageState), scale };
+      }
+      return { pages };
+    }),
+
   setCandidates: (page, candidates) => set((s) => patchPage(s, { candidates }, page)),
+
+  setDetectedScales: (page, detectedScales) =>
+    set((s) => patchPage(s, { detectedScales }, page)),
 
   toggleTag: (tag) =>
     set((s) => {
@@ -252,7 +345,14 @@ export const useStore = create<TakeoffState>((set) => ({
     set((s) => {
       const page = getPage(s);
       const marker: Marker = { id: nextId('manual'), tag, pt, source: 'manual' };
-      return patchPage(s, { manualMarkers: [...page.manualMarkers, marker] });
+      return patchPage(s, {
+        manualMarkers: [...page.manualMarkers, marker],
+        // A stored marker must never be invisible: effectiveMarkers only
+        // surfaces tags in enabledTags, so enable the tag on this page too.
+        enabledTags: page.enabledTags.includes(tag)
+          ? page.enabledTags
+          : [...page.enabledTags, tag],
+      });
     }),
 
   eraseMarker: (id) =>

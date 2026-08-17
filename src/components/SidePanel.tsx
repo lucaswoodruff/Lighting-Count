@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { downloadXlsx } from '../core/exportXlsx';
+import { downloadMultiSheetXlsx, downloadXlsx } from '../core/exportXlsx';
 import {
   COMMON_SCALES,
   impliedFeetPerPaperInch,
@@ -7,7 +7,7 @@ import {
   scaleFromCalibration,
   scaleFromRatio,
 } from '../core/scale';
-import { computeResults, usePageState, useStore } from '../state/store';
+import { computeResults, effectiveMarkers, usePageState, useStore } from '../state/store';
 
 export default function SidePanel() {
   return (
@@ -24,7 +24,9 @@ export default function SidePanel() {
 function ScaleSection() {
   const page = usePageState();
   const pending = useStore((s) => s.pendingCalibration);
+  const numPages = useStore((s) => s.numPages);
   const setScale = useStore((s) => s.setScale);
+  const applyScaleToAllPages = useStore((s) => s.applyScaleToAllPages);
   const setTool = useStore((s) => s.setTool);
   const setPendingCalibration = useStore((s) => s.setPendingCalibration);
   const [calLength, setCalLength] = useState('');
@@ -61,6 +63,19 @@ function ScaleSection() {
       {page.scale ? (
         <div className="scale-current">
           {page.scale.label}
+          {numPages > 1 && (
+            <button
+              style={{ marginLeft: 8 }}
+              title="Use this scale on every sheet of the set (per-sheet scales can still be changed afterwards)"
+              onClick={() => {
+                if (window.confirm('Apply this scale to all sheets? Existing per-sheet scales will be replaced.')) {
+                  applyScaleToAllPages();
+                }
+              }}
+            >
+              All sheets
+            </button>
+          )}
           {page.scale.source === 'calibration' && (
             <div className="note">
               ≈ {impliedFeetPerPaperInch(page.scale).toFixed(1)} ft per plotted inch
@@ -69,6 +84,23 @@ function ScaleSection() {
         </div>
       ) : (
         <div className="warn">No scale set for this sheet — areas can't be computed yet.</div>
+      )}
+
+      {!page.scale && page.detectedScales.length > 0 && (
+        <div className="note">
+          Found on this sheet:
+          {page.detectedScales.slice(0, 3).map((d) => (
+            <div key={d.label} className="row">
+              <span>
+                {d.label}
+                {d.occurrences > 1 ? ` ×${d.occurrences}` : ''}
+              </span>
+              <button onClick={() => applyRatio(d.paperInches, d.realFeet, d.label)}>
+                Use
+              </button>
+            </div>
+          ))}
+        </div>
       )}
 
       <div className="row">
@@ -149,11 +181,18 @@ function ScaleSection() {
 function TagSection() {
   const page = usePageState();
   const tagColors = useStore((s) => s.tagColors);
+  const schedule = useStore((s) => s.schedule);
+  const schedulePageLabel = useStore((s) => s.schedulePageLabel);
+  const scheduleUnreadableLabel = useStore((s) => s.scheduleUnreadableLabel);
   const toggleTag = useStore((s) => s.toggleTag);
   const addCustomTag = useStore((s) => s.addCustomTag);
   const removeTag = useStore((s) => s.removeTag);
   const [showAll, setShowAll] = useState(false);
   const [newTag, setNewTag] = useState('');
+
+  // Schedule types not yet present on this sheet — the escape hatch for
+  // numeric type codes (7, 10R) that text detection can never propose.
+  const unseeded = schedule.filter((e) => !page.candidates.some((c) => c.tag === e.type));
 
   const shown = showAll ? page.candidates : page.candidates.slice(0, 25);
 
@@ -169,6 +208,25 @@ function TagSection() {
           No candidate tags found on this sheet. If the drawing's text isn't real text
           (outlined CAD text or a scan), use the Match Symbol tool: box one example fixture
           and the app finds all identical symbols.
+        </div>
+      )}
+      {scheduleUnreadableLabel && (
+        <div className="note">
+          A fixture schedule was found on {scheduleUnreadableLabel}, but its text isn't
+          machine-readable (outlined CAD text or a scan), so types, schedule counts, and
+          wattages can't be read from it. Add types manually below and place them with
+          Match Symbol.
+        </div>
+      )}
+      {schedule.length > 0 && unseeded.length > 0 && (
+        <div className="note">
+          Fixture schedule found on {schedulePageLabel}: {schedule.length} types.{' '}
+          <button
+            title="Add each schedule type as a fixture type on this sheet — then place markers with Match Symbol or Add Fixture"
+            onClick={() => unseeded.forEach((e) => addCustomTag(e.type))}
+          >
+            Seed {unseeded.length} types
+          </button>
         </div>
       )}
       <MatchControls />
@@ -241,11 +299,12 @@ function MatchControls() {
   const requestMatch = useStore((s) => s.requestMatch);
   const clearPendingMatchBoxes = useStore((s) => s.clearPendingMatchBoxes);
   const [matchTag, setMatchTag] = useState('');
+  const [threshold, setThreshold] = useState(0.8);
 
   function run() {
     const tag = matchTag.trim().toUpperCase();
     if (!tag) return;
-    requestMatch(tag);
+    requestMatch(tag, threshold);
     setMatchTag('');
   }
 
@@ -268,6 +327,15 @@ function MatchControls() {
               onChange={(e) => setMatchTag(e.target.value.toUpperCase())}
               onKeyDown={(e) => e.key === 'Enter' && run()}
             />
+            <select
+              value={threshold}
+              title="Match strictness — loosen for faint scans, tighten if it over-matches"
+              onChange={(e) => setThreshold(Number(e.target.value))}
+            >
+              <option value={0.7}>Loose</option>
+              <option value={0.8}>Normal</option>
+              <option value={0.9}>Strict</option>
+            </select>
             <button className="primary" disabled={!matchTag.trim()} onClick={run}>
               Find matches
             </button>
@@ -297,10 +365,75 @@ function ResultsSection() {
   const renameArea = useStore((s) => s.renameArea);
   const deleteArea = useStore((s) => s.deleteArea);
 
+  const pages = useStore((s) => s.pages);
+  const schedule = useStore((s) => s.schedule);
+
   const results = useMemo(() => computeResults(page), [page]);
   const tags = page.enabledTags;
 
-  const canExport = results.length > 0 && page.scale !== null;
+  // Schedule watts per type (for connected-load export columns).
+  const wattsByType = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const e of schedule) if (e.watts !== undefined) map[e.type] = e.watts;
+    return Object.keys(map).length > 0 ? map : undefined;
+  }, [schedule]);
+
+  // Cross-check: total placed markers per type across ALL sheets vs the
+  // engineer's own schedule count. A mismatch is a note, never a correction.
+  const crossChecks = useMemo(() => {
+    const counted = new Map<string, number>();
+    for (const p of Object.values(pages)) {
+      for (const m of effectiveMarkers(p)) {
+        counted.set(m.tag, (counted.get(m.tag) ?? 0) + 1);
+      }
+    }
+    return schedule
+      .filter((e) => e.scheduleCount !== undefined && (counted.get(e.type) ?? 0) > 0)
+      .map((e) => ({ type: e.type, expected: e.scheduleCount!, counted: counted.get(e.type)! }))
+      .filter((c) => c.expected !== c.counted);
+  }, [pages, schedule]);
+
+  // Every sheet with at least one drawn area, in page order — the export unit.
+  const sheetsWithAreas = useMemo(
+    () =>
+      Object.entries(pages)
+        .map(([n, p]) => ({ n: Number(n), p }))
+        .filter(({ p }) => p.areas.length > 0)
+        .sort((a, b) => a.n - b.n),
+    [pages],
+  );
+
+  const canExport = sheetsWithAreas.length > 0 && page.scale !== null;
+  const exportLabel =
+    sheetsWithAreas.length > 1
+      ? `Export ${sheetsWithAreas.length} sheets to Excel`
+      : 'Export to Excel';
+
+  function exportAll() {
+    if (sheetsWithAreas.length > 1) {
+      downloadMultiSheetXlsx(
+        sheetsWithAreas.map(({ n, p }) => ({
+          label: pageLabels[n - 1] ?? `Page ${n}`,
+          results: computeResults(p),
+          tags: p.enabledTags,
+        })),
+        { fileName: fileName ?? 'drawing.pdf', exportedAt: new Date() },
+        wattsByType,
+      );
+    } else {
+      downloadXlsx(
+        results,
+        tags,
+        {
+          fileName: fileName ?? 'drawing.pdf',
+          pageLabel: pageLabels[currentPage - 1] ?? `Page ${currentPage}`,
+          scaleLabel: page.scale?.label ?? 'not set',
+          exportedAt: new Date(),
+        },
+        wattsByType,
+      );
+    }
+  }
 
   return (
     <section>
@@ -365,21 +498,23 @@ function ResultsSection() {
           )}
         </table>
       )}
+      {crossChecks.length > 0 && (
+        <div className="note">
+          Schedule cross-check:{' '}
+          {crossChecks
+            .map((c) => `${c.type} — schedule says ${c.expected}, you counted ${c.counted}`)
+            .join('; ')}
+          . Partial-building takeoffs will differ; whole-building ones shouldn't.
+        </div>
+      )}
       <div className="row" style={{ marginTop: 8 }}>
         <button
           className="primary"
           disabled={!canExport}
           title={canExport ? 'Download .xlsx' : 'Draw at least one area and set the scale first'}
-          onClick={() =>
-            downloadXlsx(results, tags, {
-              fileName: fileName ?? 'drawing.pdf',
-              pageLabel: pageLabels[currentPage - 1] ?? `Page ${currentPage}`,
-              scaleLabel: page.scale?.label ?? 'not set',
-              exportedAt: new Date(),
-            })
-          }
+          onClick={exportAll}
         >
-          Export to Excel
+          {exportLabel}
         </button>
       </div>
     </section>
