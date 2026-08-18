@@ -3,7 +3,7 @@ import { findTagCandidates } from '../core/detect';
 import { detectScales } from '../core/scaleDetect';
 import { crop } from '../core/match';
 import type { MatchWorkRequest, MatchWorkResponse } from '../workers/matchWorker';
-import { looksLikeSchedulePage, parseSchedule } from '../core/schedule';
+import { looksLikeSchedulePage, parseSchedule, type ScheduleEntry } from '../core/schedule';
 import { detectSheetNumber } from '../core/sheetLabel';
 import {
   extractTextItems,
@@ -11,6 +11,7 @@ import {
   getPageLabels,
   loadPdf,
   renderPageGray,
+  renderRegion,
   type PDFDocumentProxy,
 } from '../pdf/pdfService';
 import { clearSession, loadSession, sessionKey, startAutosave } from '../state/persist';
@@ -34,6 +35,9 @@ export default function App() {
       const d = await loadPdf(buf);
       const labels = await getPageLabels(d);
       setDoc(d);
+      if (new URLSearchParams(window.location.search).has('e2e')) {
+        (window as unknown as Record<string, unknown>).__takeoffDoc = d;
+      }
       useStore.getState().setDocument(file.name, d.numPages, labels);
 
       // Reattach a previous session for this document, if one was autosaved.
@@ -83,6 +87,7 @@ export default function App() {
           if (s2.fileName === file.name && s2.schedule.length === 0) {
             s2.setScheduleUnreadable(
               s2.pageLabels[unreadablePage - 1] ?? `Page ${unreadablePage}`,
+              unreadablePage,
             );
           }
         }
@@ -152,6 +157,140 @@ export default function App() {
       cancelled = true;
     };
   }, [doc, currentPage]);
+
+  // OCR a tag-name suggestion from the first boxed match example. The crop is
+  // padded well beyond the (snug) symbol box so the adjacent tag text is
+  // included. Runs once per example set; the result is a suggestion the user
+  // confirms in the side panel — never auto-applied (candidates, not answers).
+  const pendingMatchBoxes = useStore((s) => s.pendingMatchBoxes);
+  useEffect(() => {
+    if (!doc || pendingMatchBoxes.length === 0) return;
+    const st = useStore.getState();
+    if (st.tagSuggestion) return; // already read (or reading) for this set
+    const pageNum = st.currentPage;
+    const box = pendingMatchBoxes[0];
+    st.setTagSuggestion({ status: 'reading' });
+    let cancelled = false;
+    (async () => {
+      const x = Math.min(box.a.x, box.b.x);
+      const y = Math.min(box.a.y, box.b.y);
+      const w = Math.abs(box.b.x - box.a.x);
+      const h = Math.abs(box.b.y - box.a.y);
+      // Tag text sits beside the (snugly boxed) symbol, often a full symbol
+      // width away — pad generously so the label lands inside the crop.
+      const pad = Math.max(w, h) * 1.6;
+      const { canvas, scale: rScale } = await renderRegion(
+        doc,
+        pageNum,
+        { x: x - pad, y: y - pad, w: w + 2 * pad, h: h + 2 * pad },
+        480,
+      );
+      if (cancelled) return;
+      // The boxed symbol itself OCRs as letters (a circle reads as C/O) and
+      // glues onto the adjacent tag text — white it out so only the label
+      // remains. The box is snug, so a small margin covers its full extent.
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        const m = Math.max(w, h) * 0.08;
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(
+          (pad - m) * rScale,
+          (pad - m) * rScale,
+          (w + 2 * m) * rScale,
+          (h + 2 * m) * rScale,
+        );
+      }
+      const { recognizeTagCrop } = await import('../core/ocr');
+      const result = await recognizeTagCrop(canvas);
+      if (cancelled) return;
+      const s2 = useStore.getState();
+      // Only publish if this example set is still the pending one.
+      if (s2.currentPage !== pageNum || s2.pendingMatchBoxes.length === 0) return;
+      s2.setTagSuggestion(
+        result
+          ? {
+              status: 'done',
+              text: result.text,
+              confidence: result.confidence,
+              isTagShaped: result.isTagShaped,
+            }
+          : null,
+      );
+    })().catch(() => {
+      if (!cancelled) useStore.getState().setTagSuggestion(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [doc, pendingMatchBoxes]);
+
+  // Execute schedule-region OCR requests (drag box on a scanned schedule).
+  // OCR words carry positions, so the result flows through the same
+  // column-driven parseSchedule as machine-readable schedules do.
+  const scheduleOcrRequest = useStore((s) => s.scheduleOcrRequest);
+  useEffect(() => {
+    if (!scheduleOcrRequest || !doc) return;
+    const { page: pageNum, box } = scheduleOcrRequest;
+    const st = useStore.getState();
+    const pageLabel = st.pageLabels[pageNum - 1] ?? `Page ${pageNum}`;
+    st.setScheduleOcr({ status: 'reading', pageLabel });
+    let cancelled = false;
+    (async () => {
+      const rect = {
+        x: Math.min(box.a.x, box.b.x),
+        y: Math.min(box.a.y, box.b.y),
+        w: Math.abs(box.b.x - box.a.x),
+        h: Math.abs(box.b.y - box.a.y),
+      };
+      const { canvas, scale } = await renderRegion(doc, pageNum, rect, 1600);
+      if (cancelled) return;
+      const { recognizeScheduleRegion } = await import('../core/ocr');
+      const candidates = await recognizeScheduleRegion(canvas);
+      if (cancelled) return;
+      // Parse each preprocessing variant (word centers: region canvas px →
+      // page space, then the normal column parser) and keep the best table.
+      let best: { entries: ScheduleEntry[]; text: string } | null = null;
+      for (const cand of candidates) {
+        const items = cand.words.map((wd) => ({
+          str: wd.text,
+          center: { x: rect.x + wd.center.x / scale, y: rect.y + wd.center.y / scale },
+        }));
+        const entries = parseSchedule(items);
+        if (!best || entries.length > best.entries.length) {
+          best = { entries, text: cand.text };
+        }
+      }
+      const rawText = candidates.find((c) => c.text)?.text ?? '';
+      const s2 = useStore.getState();
+      s2.clearScheduleOcrRequest();
+      if (best && best.entries.length > 0) {
+        s2.setScheduleOcr({ status: 'review', pageLabel, entries: best.entries, text: best.text });
+      } else {
+        s2.setScheduleOcr({
+          status: 'failed',
+          pageLabel,
+          text: rawText,
+          message:
+            rawText.length === 0
+              ? 'No text could be read in that box.'
+              : "Text was read but a schedule table couldn't be parsed from it.",
+        });
+      }
+    })().catch((e) => {
+      if (cancelled) return;
+      const s2 = useStore.getState();
+      s2.clearScheduleOcrRequest();
+      s2.setScheduleOcr({
+        status: 'failed',
+        pageLabel,
+        text: '',
+        message: `OCR failed: ${e instanceof Error ? e.message : e}`,
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [scheduleOcrRequest, doc]);
 
   // Execute symbol-match requests (this component owns the pdf document).
   const matchRequest = useStore((s) => s.matchRequest);
@@ -278,6 +417,10 @@ function HintBar() {
       break;
     case 'erase':
       hint = 'Erase: click a fixture marker to remove it from the count.';
+      break;
+    case 'schedule-ocr':
+      hint =
+        'Read schedule: drag a box around the whole fixture schedule table, including its header row. Esc cancels.';
       break;
   }
   return <div className="hint-bar">{hint}</div>;

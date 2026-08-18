@@ -1,6 +1,25 @@
 # Future pursuit: local (in-browser) OCR for scanned / outlined-text drawings
 
-Status: **Phase 1 complete — OCR infrastructure in place** (2026-08-18).
+Status: **Phases 2–4 complete — OCR features shipped** (2026-08-18).
+
+- **Tag suggestions (Phase 2):** boxing a Match Symbol example OCRs a padded
+  crop around it (symbol whited out — it OCRs as letters otherwise) and offers
+  the read tag as a click-to-use suggestion in the side panel. Verified e2e on
+  a ~300 DPI synthetic scan: "EM1" at 90% confidence.
+- **Scanned schedules (Phase 3):** a `schedule-ocr` drag-box tool renders the
+  region at high res, OCRs three preprocessing variants (incl. sparse-text
+  mode — table grid lines break AUTO segmentation), maps word boxes to page
+  space, and feeds each through the existing column-driven `parseSchedule`;
+  the best parse is shown for user confirmation. Entry points: the
+  "schedule found but unreadable" note and the no-candidate-tags warning.
+- **Hardening (Phase 4):** `ocr.ts` loads via dynamic import (own chunk);
+  contrast-stretch normalization mirrors the spike; unit tests for word
+  collection, store lifecycle (suggestion clearing, accept flow); `?e2e`
+  window hooks for browser-driven testing.
+- Fixed along the way: first-open blank sheet (bitmap render effect missing
+  `pageDims` dep) and `renderRegion` leaking its translate to callers.
+
+Phase 1 (2026-08-18): OCR infrastructure in place.
 
 - `src/core/ocr.ts`: `recognizeTagCrop()` (Phase 0 sweep pipeline: variants ×
   rotations × PSMs, pattern-first scoring) and `recognizeScheduleRegion()`,

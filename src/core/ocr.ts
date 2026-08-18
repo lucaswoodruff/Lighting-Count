@@ -70,21 +70,31 @@ function makeCanvas(w: number, h: number): HTMLCanvasElement {
 }
 
 function scaled(src: Drawable, factor: number, binarize: boolean): HTMLCanvasElement {
-  const out = makeCanvas(src.width * factor, src.height * factor);
+  const out = makeCanvas(Math.round(src.width * factor), Math.round(src.height * factor));
   const ctx = out.getContext('2d')!;
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(src as CanvasImageSource, 0, 0, out.width, out.height);
-  if (binarize) {
-    const img = ctx.getImageData(0, 0, out.width, out.height);
-    const d = img.data;
-    for (let i = 0; i < d.length; i += 4) {
-      const v = (d[i] + d[i + 1] + d[i + 2]) / 3 < 140 ? 0 : 255;
-      d[i] = d[i + 1] = d[i + 2] = v;
-      d[i + 3] = 255;
-    }
-    ctx.putImageData(img, 0, 0);
+  const img = ctx.getImageData(0, 0, out.width, out.height);
+  const d = img.data;
+  // Contrast-stretch to the full range (faint scans read much better), then
+  // optionally binarize — mirrors the normalise/threshold steps the Phase 0
+  // spike validated.
+  let lo = 255;
+  let hi = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
   }
+  const range = Math.max(1, hi - lo);
+  for (let i = 0; i < d.length; i += 4) {
+    let v = (((d[i] + d[i + 1] + d[i + 2]) / 3 - lo) / range) * 255;
+    if (binarize) v = v < 140 ? 0 : 255;
+    d[i] = d[i + 1] = d[i + 2] = v;
+    d[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
   return out;
 }
 
@@ -160,21 +170,87 @@ export async function recognizeTagCrop(crop: Drawable): Promise<OcrTagResult | n
   return pickBestTagCandidate(candidates);
 }
 
+export interface OcrWord {
+  text: string;
+  confidence: number;
+  /** Word-box center in the coordinate space of the input region. */
+  center: { x: number; y: number };
+}
+
+export interface OcrRegionResult {
+  /** Full recognized text (for the user-facing raw view). */
+  text: string;
+  /** Individual words with positions — feed these through parseSchedule. */
+  words: OcrWord[];
+  confidence: number;
+}
+
+/** Flatten Tesseract's block tree into positioned words (exported for tests). */
+export function collectWords(
+  blocks: unknown,
+  downscale: number,
+): OcrWord[] {
+  const out: OcrWord[] = [];
+  type Bbox = { x0: number; y0: number; x1: number; y1: number };
+  type Word = { text: string; confidence: number; bbox: Bbox };
+  type Line = { words?: Word[] };
+  type Para = { lines?: Line[] };
+  type Block = { paragraphs?: Para[] };
+  for (const b of (blocks as Block[]) ?? []) {
+    for (const p of b.paragraphs ?? []) {
+      for (const l of p.lines ?? []) {
+        for (const w of l.words ?? []) {
+          const text = w.text.trim();
+          if (!text) continue;
+          out.push({
+            text,
+            confidence: w.confidence,
+            center: {
+              x: ((w.bbox.x0 + w.bbox.x1) / 2) * downscale,
+              y: ((w.bbox.y0 + w.bbox.y1) / 2) * downscale,
+            },
+          });
+        }
+      }
+    }
+  }
+  return out;
+}
+
 /**
- * OCR a user-selected schedule-table region. Returns raw text lines for the
- * user to correct before they flow into parseSchedule. Larger grid-aligned
- * text is the easy case; the spike recovered 18/21 words at 3x upscale.
+ * OCR a user-selected schedule-table region. Every preprocessing variant is
+ * returned (highest Tesseract confidence first) — the caller parses each and
+ * keeps whichever yields the best schedule, since Tesseract's own confidence
+ * is a poor proxy for table-structure quality. Words carry positions in the
+ * input region's coordinate space so the existing column-driven parseSchedule
+ * can run on them. Output is a *candidate* the user confirms.
  */
-export async function recognizeScheduleRegion(region: Drawable): Promise<string> {
+export async function recognizeScheduleRegion(region: Drawable): Promise<OcrRegionResult[]> {
   const worker = await getWorker();
-  await worker.setParameters({
-    tessedit_char_whitelist: '',
-    tessedit_pageseg_mode: PSM.AUTO,
-  });
-  const results = await Promise.all(
-    [scaled(region, 3, false), scaled(region, 3, true)].map((v) => worker.recognize(v)),
-  );
-  // Prefer the variant Tesseract itself was more confident about.
-  results.sort((a, b) => b.data.confidence - a.data.confidence);
-  return results[0].data.text.trim();
+  // Aim the OCR input at ~1600 px on the long side (the resolution band the
+  // Phase 0 spike validated). The caller's region render is usually already
+  // there, so this mostly avoids a second interpolated upscale.
+  const factor = Math.min(3, Math.max(1, 1600 / Math.max(region.width, region.height)));
+  // Sparse mode reads short isolated cells (the TYPE column) that the page
+  // segmenter drops when table grid lines break up its layout analysis.
+  const variants: { image: HTMLCanvasElement; psm: PSM }[] = [
+    { image: scaled(region, factor, false), psm: PSM.AUTO },
+    { image: scaled(region, factor, false), psm: PSM.SPARSE_TEXT },
+    { image: scaled(region, factor, true), psm: PSM.AUTO },
+  ];
+  const results: OcrRegionResult[] = [];
+  for (const v of variants) {
+    await worker.setParameters({
+      tessedit_char_whitelist: '',
+      tessedit_pageseg_mode: v.psm,
+    });
+    const { data } = await worker.recognize(v.image, {}, { blocks: true, text: true });
+    results.push({
+      text: data.text.trim(),
+      words: collectWords(data.blocks, 1 / factor),
+      confidence: data.confidence,
+    });
+  }
+  results.sort((a, b) => b.confidence - a.confidence);
+  return results;
 }

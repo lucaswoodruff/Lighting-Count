@@ -7,7 +7,27 @@ import { areaSquareFeet } from '../core/scale';
 import type { DetectedScale } from '../core/scaleDetect';
 import type { ScheduleEntry } from '../core/schedule';
 
-export type Tool = 'pan' | 'calibrate' | 'area' | 'rect' | 'match' | 'add' | 'erase';
+export type Tool =
+  | 'pan'
+  | 'calibrate'
+  | 'area'
+  | 'rect'
+  | 'match'
+  | 'add'
+  | 'erase'
+  /** Drag a box around a scanned/outlined fixture-schedule table to OCR it. */
+  | 'schedule-ocr';
+
+/** OCR-proposed tag name for the pending match example boxes. */
+export type TagSuggestion =
+  | { status: 'reading' }
+  | { status: 'done'; text: string; confidence: number; isTagShaped: boolean };
+
+/** Schedule-region OCR lifecycle (drag box → read → user confirms). */
+export type ScheduleOcrState =
+  | { status: 'reading'; pageLabel: string }
+  | { status: 'review'; pageLabel: string; entries: ScheduleEntry[]; text: string }
+  | { status: 'failed'; pageLabel: string; text: string; message: string };
 
 export interface PageState {
   scale: ScaleSetting | null;
@@ -76,12 +96,26 @@ interface TakeoffState {
    * failure becomes a visible explanation.
    */
   scheduleUnreadableLabel: string | null;
+  /** 1-based page of the unreadable schedule, for "jump there and OCR it". */
+  scheduleUnreadablePage: number | null;
+  /** OCR-proposed name for the boxed match examples (user confirms via "Use"). */
+  tagSuggestion: TagSuggestion | null;
+  /** Schedule region awaiting OCR (set by the viewer, consumed by App). */
+  scheduleOcrRequest: { page: number; box: PendingMatch } | null;
+  scheduleOcr: ScheduleOcrState | null;
+
+  setTagSuggestion(s: TagSuggestion | null): void;
+  requestScheduleOcr(box: PendingMatch): void;
+  clearScheduleOcrRequest(): void;
+  setScheduleOcr(s: ScheduleOcrState | null): void;
+  /** Adopt the OCR-parsed schedule entries the user just confirmed. */
+  acceptScheduleOcr(): void;
 
   setDocument(fileName: string, numPages: number, pageLabels: string[]): void;
   setPageLabel(page: number, label: string): void;
   restoreSession(pages: Record<number, PageState>, tagColors: Record<string, string>): void;
   setSchedule(schedule: ScheduleEntry[], schedulePageLabel: string | null): void;
-  setScheduleUnreadable(label: string | null): void;
+  setScheduleUnreadable(label: string | null, page?: number | null): void;
   replacePages(pages: Record<number, PageState>): void;
   closeDocument(): void;
   setPage(n: number): void;
@@ -162,6 +196,10 @@ export const useStore = create<TakeoffState>((set) => ({
   schedule: [],
   schedulePageLabel: null,
   scheduleUnreadableLabel: null,
+  scheduleUnreadablePage: null,
+  tagSuggestion: null,
+  scheduleOcrRequest: null,
+  scheduleOcr: null,
 
   setDocument: (fileName, numPages, pageLabels) =>
     set({
@@ -181,11 +219,37 @@ export const useStore = create<TakeoffState>((set) => ({
       schedule: [],
       schedulePageLabel: null,
       scheduleUnreadableLabel: null,
+      scheduleUnreadablePage: null,
+      tagSuggestion: null,
+      scheduleOcrRequest: null,
+      scheduleOcr: null,
     }),
 
   setSchedule: (schedule, schedulePageLabel) =>
-    set({ schedule, schedulePageLabel, scheduleUnreadableLabel: null }),
-  setScheduleUnreadable: (scheduleUnreadableLabel) => set({ scheduleUnreadableLabel }),
+    set({ schedule, schedulePageLabel, scheduleUnreadableLabel: null, scheduleUnreadablePage: null }),
+  setScheduleUnreadable: (scheduleUnreadableLabel, scheduleUnreadablePage = null) =>
+    set({ scheduleUnreadableLabel, scheduleUnreadablePage }),
+
+  setTagSuggestion: (tagSuggestion) => set({ tagSuggestion }),
+
+  requestScheduleOcr: (box) =>
+    set((s) => ({ scheduleOcrRequest: { page: s.currentPage, box } })),
+  clearScheduleOcrRequest: () => set({ scheduleOcrRequest: null }),
+  setScheduleOcr: (scheduleOcr) => set({ scheduleOcr }),
+
+  acceptScheduleOcr: () =>
+    set((s) =>
+      s.scheduleOcr?.status === 'review'
+        ? {
+            schedule: s.scheduleOcr.entries,
+            schedulePageLabel: s.scheduleOcr.pageLabel,
+            scheduleUnreadableLabel: null,
+            scheduleUnreadablePage: null,
+            scheduleOcr: null,
+            tool: 'pan',
+          }
+        : {},
+    ),
 
   /**
    * Reattach a saved takeoff to the just-opened document. Bumps the id
@@ -220,14 +284,17 @@ export const useStore = create<TakeoffState>((set) => ({
       pendingCalibration: null,
       pendingMatchBoxes: [],
       matchStatus: null,
+      tagSuggestion: null,
+      scheduleOcrRequest: null,
     }),
-  setTool: (tool) => set({ tool, pendingCalibration: null, pendingMatchBoxes: [] }),
+  setTool: (tool) =>
+    set({ tool, pendingCalibration: null, pendingMatchBoxes: [], tagSuggestion: null }),
   setActiveTag: (activeTag) => set({ activeTag }),
   setZoom: (zoom) => set({ zoom: Math.min(8, Math.max(0.2, zoom)) }),
   setPendingCalibration: (pendingCalibration) => set({ pendingCalibration }),
   addPendingMatchBox: (box) =>
     set((s) => ({ pendingMatchBoxes: [...s.pendingMatchBoxes, box] })),
-  clearPendingMatchBoxes: () => set({ pendingMatchBoxes: [] }),
+  clearPendingMatchBoxes: () => set({ pendingMatchBoxes: [], tagSuggestion: null }),
 
   requestMatch: (tag, threshold) =>
     set((s) =>
@@ -235,6 +302,7 @@ export const useStore = create<TakeoffState>((set) => ({
         ? {
             matchRequest: { tag, boxes: s.pendingMatchBoxes, threshold },
             pendingMatchBoxes: [],
+            tagSuggestion: null,
           }
         : {},
     ),

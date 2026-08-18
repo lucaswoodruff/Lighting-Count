@@ -200,3 +200,67 @@ describe('restoreSession + undo', () => {
     }
   });
 });
+
+describe('schedule OCR flow', () => {
+  it('requestScheduleOcr captures the current page with the box', () => {
+    const st = useStore.getState();
+    st.setPage(2);
+    useStore.getState().requestScheduleOcr({ a: { x: 0, y: 0 }, b: { x: 10, y: 10 } });
+    expect(useStore.getState().scheduleOcrRequest).toMatchObject({ page: 2 });
+  });
+
+  it('acceptScheduleOcr adopts reviewed entries and clears the unreadable flag', () => {
+    const st = useStore.getState();
+    st.setScheduleUnreadable('E3', 3);
+    st.setScheduleOcr({
+      status: 'review',
+      pageLabel: 'E3',
+      entries: [{ type: 'A2', watts: 38 }, { type: 'F1' }],
+      text: 'raw',
+    });
+    useStore.getState().acceptScheduleOcr();
+    const s = useStore.getState();
+    expect(s.schedule.map((e) => e.type)).toEqual(['A2', 'F1']);
+    expect(s.schedulePageLabel).toBe('E3');
+    expect(s.scheduleUnreadableLabel).toBeNull();
+    expect(s.scheduleOcr).toBeNull();
+    expect(s.tool).toBe('pan');
+  });
+
+  it('acceptScheduleOcr is a no-op outside review state', () => {
+    const st = useStore.getState();
+    st.setScheduleOcr({ status: 'reading', pageLabel: 'E3' });
+    useStore.getState().acceptScheduleOcr();
+    expect(useStore.getState().schedule).toEqual([]);
+    expect(useStore.getState().scheduleOcr).toMatchObject({ status: 'reading' });
+  });
+});
+
+describe('tag suggestion lifecycle', () => {
+  it('clears when the example boxes are cleared, the tool changes, or a match runs', () => {
+    const st = useStore.getState();
+    const suggestion = { status: 'done', text: 'A2', confidence: 90, isTagShaped: true } as const;
+
+    st.addPendingMatchBox({ a: { x: 0, y: 0 }, b: { x: 5, y: 5 } });
+    st.setTagSuggestion(suggestion);
+    useStore.getState().clearPendingMatchBoxes();
+    expect(useStore.getState().tagSuggestion).toBeNull();
+
+    st.setTagSuggestion(suggestion);
+    st.setTool('pan');
+    expect(useStore.getState().tagSuggestion).toBeNull();
+
+    st.addPendingMatchBox({ a: { x: 0, y: 0 }, b: { x: 5, y: 5 } });
+    st.setTagSuggestion(suggestion);
+    useStore.getState().requestMatch('A2', 0.8);
+    expect(useStore.getState().tagSuggestion).toBeNull();
+    expect(useStore.getState().matchRequest).not.toBeNull();
+  });
+
+  it('clears on page change', () => {
+    const st = useStore.getState();
+    st.setTagSuggestion({ status: 'reading' });
+    st.setPage(2);
+    expect(useStore.getState().tagSuggestion).toBeNull();
+  });
+});

@@ -47,6 +47,8 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
   // Render the PDF bitmap. Debounced so rapid zooming doesn't queue a full
   // re-render per wheel tick (the canvas CSS-scales instantly in the
   // meantime), chained so renders never overlap, and stale renders skipped.
+  // pageDims is a dependency because the canvas only mounts once it resolves —
+  // without it the first run sees no canvas and the sheet stays blank.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -64,7 +66,7 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [doc, currentPage, zoom]);
+  }, [doc, currentPage, zoom, pageDims]);
 
   // Reset in-progress drawings when the page or tool changes.
   useEffect(() => {
@@ -235,19 +237,21 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
     }
   }
 
+  const isDragBoxTool = tool === 'rect' || tool === 'match' || tool === 'schedule-ocr';
+
   function onStageMouseMove() {
-    if (tool === 'area' || tool === 'calibrate' || tool === 'rect' || tool === 'match') {
+    if (tool === 'area' || tool === 'calibrate' || isDragBoxTool) {
       setCursor(pointerPagePos());
     }
   }
 
   function onStageMouseDown() {
-    if (tool !== 'rect' && tool !== 'match') return;
+    if (!isDragBoxTool) return;
     setRectStart(pointerPagePos());
   }
 
   function onStageMouseUp() {
-    if ((tool !== 'rect' && tool !== 'match') || !rectStart) return;
+    if (!isDragBoxTool || !rectStart) return;
     const b = pointerPagePos();
     setRectStart(null);
     if (!b) return;
@@ -255,8 +259,10 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
     if (Math.abs(b.x - rectStart.x) < 4 / zoom || Math.abs(b.y - rectStart.y) < 4 / zoom) return;
     if (tool === 'rect') {
       useStore.getState().addArea(rectCorners(rectStart, b));
-    } else {
+    } else if (tool === 'match') {
       useStore.getState().addPendingMatchBox({ a: rectStart, b });
+    } else {
+      useStore.getState().requestScheduleOcr({ a: rectStart, b });
     }
   }
 
@@ -329,15 +335,23 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
                   ))}
                 </>
               )}
-              {/* Draft rectangle (area or match template) */}
-              {(tool === 'rect' || tool === 'match') && rectStart && cursor && (
+              {/* Draft rectangle (area, match template, or schedule OCR region) */}
+              {isDragBoxTool && rectStart && cursor && (
                 <Line
                   points={flat(rectCorners(rectStart, cursor))}
                   closed
-                  stroke={tool === 'rect' ? '#1d4ed8' : '#ea580c'}
+                  stroke={
+                    tool === 'rect' ? '#1d4ed8' : tool === 'match' ? '#ea580c' : '#7c3aed'
+                  }
                   strokeWidth={px(1.5)}
                   dash={[px(6), px(4)]}
-                  fill={tool === 'rect' ? 'rgba(37, 99, 235, 0.08)' : 'rgba(234, 88, 12, 0.08)'}
+                  fill={
+                    tool === 'rect'
+                      ? 'rgba(37, 99, 235, 0.08)'
+                      : tool === 'match'
+                        ? 'rgba(234, 88, 12, 0.08)'
+                        : 'rgba(124, 58, 237, 0.08)'
+                  }
                 />
               )}
               {/* Pending match example boxes awaiting a type name */}

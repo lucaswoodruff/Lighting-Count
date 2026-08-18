@@ -184,6 +184,7 @@ function TagSection() {
   const schedule = useStore((s) => s.schedule);
   const schedulePageLabel = useStore((s) => s.schedulePageLabel);
   const scheduleUnreadableLabel = useStore((s) => s.scheduleUnreadableLabel);
+  const scheduleOcr = useStore((s) => s.scheduleOcr);
   const toggleTag = useStore((s) => s.toggleTag);
   const addCustomTag = useStore((s) => s.addCustomTag);
   const removeTag = useStore((s) => s.removeTag);
@@ -208,16 +209,39 @@ function TagSection() {
           No candidate tags found on this sheet. If the drawing's text isn't real text
           (outlined CAD text or a scan), use the Match Symbol tool: box one example fixture
           and the app finds all identical symbols.
+          {schedule.length === 0 && !scheduleOcr && (
+            <>
+              {' '}
+              If a sheet has the fixture schedule,{' '}
+              <button
+                title="Go to the schedule sheet, then drag a box around the table — the app reads it with on-device OCR (nothing leaves this machine). You review the result before it's used."
+                onClick={() => useStore.getState().setTool('schedule-ocr')}
+              >
+                read it with OCR
+              </button>
+              .
+            </>
+          )}
         </div>
       )}
-      {scheduleUnreadableLabel && (
+      {scheduleUnreadableLabel && !scheduleOcr && (
         <div className="note">
           A fixture schedule was found on {scheduleUnreadableLabel}, but its text isn't
-          machine-readable (outlined CAD text or a scan), so types, schedule counts, and
-          wattages can't be read from it. Add types manually below and place them with
-          Match Symbol.
+          machine-readable (outlined CAD text or a scan).{' '}
+          <button
+            title="Jump to the schedule sheet and drag a box around the table — the app reads it with on-device OCR (nothing leaves this machine). You review the result before it's used."
+            onClick={() => {
+              const st = useStore.getState();
+              if (st.scheduleUnreadablePage) st.setPage(st.scheduleUnreadablePage);
+              st.setTool('schedule-ocr');
+            }}
+          >
+            Read it with OCR
+          </button>{' '}
+          Or add types manually below and place them with Match Symbol.
         </div>
       )}
+      <ScheduleOcrPanel />
       {schedule.length > 0 && unseeded.length > 0 && (
         <div className="note">
           Fixture schedule found on {schedulePageLabel}: {schedule.length} types.{' '}
@@ -291,6 +315,58 @@ function TagSection() {
 
 /* ------------------------------------------------------------------ */
 
+/** Schedule-region OCR lifecycle UI: reading → review/confirm or failure. */
+function ScheduleOcrPanel() {
+  const scheduleOcr = useStore((s) => s.scheduleOcr);
+  const acceptScheduleOcr = useStore((s) => s.acceptScheduleOcr);
+  const setScheduleOcr = useStore((s) => s.setScheduleOcr);
+  if (!scheduleOcr) return null;
+
+  if (scheduleOcr.status === 'reading') {
+    return <div className="note">Reading the schedule table with OCR…</div>;
+  }
+  if (scheduleOcr.status === 'review') {
+    const { entries, pageLabel, text } = scheduleOcr;
+    return (
+      <div className="note">
+        OCR read {entries.length} fixture types from {pageLabel}:{' '}
+        {entries.map((e) => e.type).join(', ')}.
+        {entries.some((e) => e.watts !== undefined) && ' Wattages were read too.'}{' '}
+        Check them against the drawing — OCR can misread characters.
+        <div className="row" style={{ marginTop: 4 }}>
+          <button className="primary" onClick={acceptScheduleOcr}>
+            Use these {entries.length} types
+          </button>
+          <button onClick={() => setScheduleOcr(null)}>Discard</button>
+        </div>
+        <details style={{ marginTop: 4 }}>
+          <summary>Raw OCR text</summary>
+          <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{text}</pre>
+        </details>
+      </div>
+    );
+  }
+  return (
+    <div className="warn">
+      {scheduleOcr.message} Try a tighter box around just the table, or add types manually
+      below.
+      {scheduleOcr.text && (
+        <details style={{ marginTop: 4 }}>
+          <summary>What OCR read</summary>
+          <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>
+            {scheduleOcr.text}
+          </pre>
+        </details>
+      )}
+      <div className="row" style={{ marginTop: 4 }}>
+        <button onClick={() => setScheduleOcr(null)}>Dismiss</button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
 /** Name-and-run controls for drawn symbol-match example boxes, plus status. */
 function MatchControls() {
   const boxCount = useStore((s) => s.pendingMatchBoxes.length);
@@ -298,6 +374,7 @@ function MatchControls() {
   const matchStatus = useStore((s) => s.matchStatus);
   const requestMatch = useStore((s) => s.requestMatch);
   const clearPendingMatchBoxes = useStore((s) => s.clearPendingMatchBoxes);
+  const tagSuggestion = useStore((s) => s.tagSuggestion);
   const [matchTag, setMatchTag] = useState('');
   const [threshold, setThreshold] = useState(0.8);
 
@@ -317,6 +394,22 @@ function MatchControls() {
             {boxCount} example{boxCount > 1 ? 's' : ''} boxed — box more on the plan, or name
             the type and search:
           </div>
+          {tagSuggestion?.status === 'reading' && !matchTag && (
+            <div className="note">Reading the tag near your box…</div>
+          )}
+          {tagSuggestion?.status === 'done' && !matchTag && (
+            <div className="note">
+              Looks like{' '}
+              <button
+                title={`OCR read "${tagSuggestion.text}" near your example (confidence ${Math.round(tagSuggestion.confidence)}%). Click to use it — check it against the drawing.`}
+                onClick={() => setMatchTag(tagSuggestion.text)}
+              >
+                {tagSuggestion.text}
+              </button>
+              {tagSuggestion.isTagShaped ? '' : ' (uncertain)'} — click to use, or type the
+              name yourself.
+            </div>
+          )}
           <div className="row">
             <input
               type="text"

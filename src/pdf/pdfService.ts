@@ -128,6 +128,46 @@ export async function renderPageGray(
   return result;
 }
 
+export interface RegionRender {
+  canvas: HTMLCanvasElement;
+  /** Multiply page-space coordinates (relative to the region origin) by this to get canvas pixels. */
+  scale: number;
+}
+
+/**
+ * Rasterize one page-space rectangle at high resolution (for OCR). The whole
+ * page's vectors are replayed but only the region's pixels are kept, so
+ * memory stays bounded by `targetPx` regardless of sheet size.
+ */
+export async function renderRegion(
+  doc: PDFDocumentProxy,
+  pageNum: number,
+  rect: { x: number; y: number; w: number; h: number },
+  targetPx: number,
+): Promise<RegionRender> {
+  const page = await doc.getPage(pageNum);
+  const w = Math.max(1, rect.w);
+  const h = Math.max(1, rect.h);
+  // Aim the region's larger side at targetPx; cap total pixels so a huge
+  // region drag can't allocate an oversized canvas.
+  let scale = targetPx / Math.max(w, h);
+  const maxScale = Math.sqrt(MAX_RENDER_PIXELS / (w * h));
+  scale = Math.max(1, Math.min(scale, maxScale));
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(w * scale);
+  canvas.height = Math.ceil(h * scale);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('Canvas 2D context unavailable');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.translate(-rect.x * scale, -rect.y * scale);
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  // Hand back a clean context — callers draw on the canvas in pixel space.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  return { canvas, scale };
+}
+
 /**
  * All text strings on a page with bounding-box centers in page space
  * (top-left origin, PDF points). Feeds tag detection and marker placement.
