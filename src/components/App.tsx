@@ -71,6 +71,9 @@ export default function App() {
             const entries = parseSchedule(items);
             if (entries.length > 0) {
               const s2 = useStore.getState();
+              // Re-check after the awaits: the user may have adopted an
+              // OCR-read schedule meanwhile — never overwrite a reviewed one.
+              if (s2.fileName !== file.name || s2.schedule.length > 0) return;
               s2.setSchedule(entries, s2.pageLabels[p - 1] ?? `Page ${p}`);
               return;
             }
@@ -215,7 +218,7 @@ export default function App() {
         );
       }
       const { recognizeTagCrop } = await import('../core/ocr');
-      const result = await recognizeTagCrop(canvas);
+      const result = await recognizeTagCrop(canvas, () => !isCurrent());
       // Publish only if this exact example set is still the pending one — the
       // user may have cleared it and boxed a different symbol meanwhile
       // (object identity: clearing always produces new arrays/boxes).
@@ -256,7 +259,7 @@ export default function App() {
       const { canvas, scale } = await renderRegion(doc, pageNum, rect, 1600);
       if (cancelled) return;
       const { recognizeScheduleRegion } = await import('../core/ocr');
-      const candidates = await recognizeScheduleRegion(canvas);
+      const candidates = await recognizeScheduleRegion(canvas, () => cancelled);
       if (cancelled) return;
       // Parse each preprocessing variant (word centers: region canvas px →
       // page space, then the normal column parser) and keep the best table.

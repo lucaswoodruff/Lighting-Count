@@ -9,6 +9,12 @@ const TOOLS: { id: Tool; label: string; title: string }[] = [
   { id: 'match', label: 'Match Symbol', title: 'Box one fixture symbol; find all identical ones' },
   { id: 'add', label: 'Add Fixture', title: 'Click to add a missed fixture' },
   { id: 'erase', label: 'Erase', title: 'Click a marker to remove it' },
+  {
+    id: 'schedule-ocr',
+    label: 'Read Schedule',
+    title:
+      'Drag a box around a scanned fixture-schedule table to read it with on-device OCR',
+  },
 ];
 
 export default function Toolbar({ onOpenFile }: { onOpenFile: (f: File) => void }) {

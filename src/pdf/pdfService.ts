@@ -152,7 +152,9 @@ export async function renderRegion(
   // region drag can't allocate an oversized canvas.
   let scale = targetPx / Math.max(w, h);
   const maxScale = Math.sqrt(MAX_RENDER_PIXELS / (w * h));
-  scale = Math.max(1, Math.min(scale, maxScale));
+  // Floor at 1 for small regions, but the pixel cap always wins — a giant
+  // drag (maxScale < 1) must downsample rather than blow past the cap.
+  scale = Math.min(Math.max(1, scale), maxScale);
   const viewport = page.getViewport({ scale });
   const canvas = document.createElement('canvas');
   canvas.width = Math.ceil(w * scale);

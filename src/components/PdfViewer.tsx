@@ -150,8 +150,12 @@ export default function PdfViewer({ doc }: { doc: PDFDocumentProxy }) {
         setDraftPts([]);
         setCalStart(null);
         setRectStart(null);
-        useStore.getState().setPendingCalibration(null);
-        useStore.getState().clearPendingMatchBoxes();
+        const st = useStore.getState();
+        st.setPendingCalibration(null);
+        st.clearPendingMatchBoxes();
+        // The hint promises "Esc cancels" for schedule OCR — leave the mode
+        // too, or the next drag silently starts another OCR read.
+        if (st.tool === 'schedule-ocr') st.setTool('pan');
       } else if (e.key === 'Enter' && draftPts.length >= 3) {
         useStore.getState().addArea(dedupe(draftPts));
         setDraftPts([]);

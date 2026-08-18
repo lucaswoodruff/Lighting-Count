@@ -172,8 +172,14 @@ async function recognizeOnce(
  * OCR a small crop around a suspected fixture tag. Returns the best candidate
  * (a *suggestion* for the user to confirm) or null when nothing was read.
  */
-export function recognizeTagCrop(crop: Drawable): Promise<OcrTagResult | null> {
+export function recognizeTagCrop(
+  crop: Drawable,
+  shouldAbort: () => boolean = () => false,
+): Promise<OcrTagResult | null> {
   return enqueue(async () => {
+    // The request may have gone stale while queued behind another OCR job —
+    // and a sweep abandoned mid-way frees the worker for the live request.
+    if (shouldAbort()) return null;
     const worker = await getWorker();
     const candidates: OcrCandidate[] = [];
     // Variants are built (and released) one at a time — a big crop otherwise
@@ -181,6 +187,10 @@ export function recognizeTagCrop(crop: Drawable): Promise<OcrTagResult | null> {
     for (const [factor, binarize] of [[1, false], [2, false], [4, true]] as const) {
       const variant = scaled(crop, factor, binarize);
       for (const deg of [0, 90, 180, 270] as const) {
+        if (shouldAbort()) {
+          release(variant);
+          return null;
+        }
         const img = rotated(variant, deg);
         for (const psm of [PSM.AUTO, PSM.SINGLE_LINE]) {
           candidates.push(
@@ -250,8 +260,12 @@ export function collectWords(
  * input region's coordinate space so the existing column-driven parseSchedule
  * can run on them. Output is a *candidate* the user confirms.
  */
-export function recognizeScheduleRegion(region: Drawable): Promise<OcrRegionResult[]> {
+export function recognizeScheduleRegion(
+  region: Drawable,
+  shouldAbort: () => boolean = () => false,
+): Promise<OcrRegionResult[]> {
   return enqueue(async () => {
+    if (shouldAbort()) return [];
     const worker = await getWorker();
     // Aim the OCR input at ~1600 px on the long side (the resolution band the
     // Phase 0 spike validated). The caller's region render is usually already
@@ -267,6 +281,7 @@ export function recognizeScheduleRegion(region: Drawable): Promise<OcrRegionResu
     ];
     const results: OcrRegionResult[] = [];
     for (const v of variants) {
+      if (shouldAbort()) break; // free the worker for the live request
       const image = scaled(region, factor, v.binarize);
       await worker.setParameters({
         tessedit_char_whitelist: '',
