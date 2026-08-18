@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { findTagCandidates } from '../core/detect';
 import { detectScales } from '../core/scaleDetect';
 import { crop } from '../core/match';
@@ -163,14 +163,28 @@ export default function App() {
   // included. Runs once per example set; the result is a suggestion the user
   // confirms in the side panel — never auto-applied (candidates, not answers).
   const pendingMatchBoxes = useStore((s) => s.pendingMatchBoxes);
+  const lastOcrBox = useRef<object | null>(null);
   useEffect(() => {
-    if (!doc || pendingMatchBoxes.length === 0) return;
-    const st = useStore.getState();
-    if (st.tagSuggestion) return; // already read (or reading) for this set
-    const pageNum = st.currentPage;
+    if (!doc || pendingMatchBoxes.length === 0) {
+      lastOcrBox.current = null;
+      return;
+    }
     const box = pendingMatchBoxes[0];
+    // One OCR per example set, keyed by the first box's identity — a status
+    // sentinel would wedge at "reading" if this effect re-ran (second box
+    // added, StrictMode double-mount) while the first run was in flight.
+    if (lastOcrBox.current === box) return;
+    lastOcrBox.current = box;
+    const st = useStore.getState();
+    const pageNum = st.currentPage;
     st.setTagSuggestion({ status: 'reading' });
-    let cancelled = false;
+    // No cleanup-based cancellation: adding a second box re-runs this effect
+    // but must NOT cancel the in-flight read of the first box. Staleness is
+    // handled at publish time against the live store instead.
+    const isCurrent = () => {
+      const s = useStore.getState();
+      return s.currentPage === pageNum && s.pendingMatchBoxes[0] === box;
+    };
     (async () => {
       const x = Math.min(box.a.x, box.b.x);
       const y = Math.min(box.a.y, box.b.y);
@@ -185,7 +199,7 @@ export default function App() {
         { x: x - pad, y: y - pad, w: w + 2 * pad, h: h + 2 * pad },
         480,
       );
-      if (cancelled) return;
+      if (!isCurrent()) return;
       // The boxed symbol itself OCRs as letters (a circle reads as C/O) and
       // glues onto the adjacent tag text — white it out so only the label
       // remains. The box is snug, so a small margin covers its full extent.
@@ -202,11 +216,11 @@ export default function App() {
       }
       const { recognizeTagCrop } = await import('../core/ocr');
       const result = await recognizeTagCrop(canvas);
-      if (cancelled) return;
-      const s2 = useStore.getState();
-      // Only publish if this example set is still the pending one.
-      if (s2.currentPage !== pageNum || s2.pendingMatchBoxes.length === 0) return;
-      s2.setTagSuggestion(
+      // Publish only if this exact example set is still the pending one — the
+      // user may have cleared it and boxed a different symbol meanwhile
+      // (object identity: clearing always produces new arrays/boxes).
+      if (!isCurrent()) return;
+      useStore.getState().setTagSuggestion(
         result
           ? {
               status: 'done',
@@ -217,11 +231,8 @@ export default function App() {
           : null,
       );
     })().catch(() => {
-      if (!cancelled) useStore.getState().setTagSuggestion(null);
+      if (isCurrent()) useStore.getState().setTagSuggestion(null);
     });
-    return () => {
-      cancelled = true;
-    };
   }, [doc, pendingMatchBoxes]);
 
   // Execute schedule-region OCR requests (drag box on a scanned schedule).
@@ -289,6 +300,11 @@ export default function App() {
     });
     return () => {
       cancelled = true;
+      // A cancelled run must not leave the panel stuck on "Reading…". The
+      // completed states (review/failed) are set only after the cancelled
+      // check, so anything still "reading" here belongs to this run.
+      const s2 = useStore.getState();
+      if (s2.scheduleOcr?.status === 'reading') s2.setScheduleOcr(null);
     };
   }, [scheduleOcrRequest, doc]);
 

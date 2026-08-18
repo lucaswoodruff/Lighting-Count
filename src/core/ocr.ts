@@ -135,6 +135,25 @@ export async function disposeOcr(): Promise<void> {
   if (p) await (await p).terminate();
 }
 
+/**
+ * The worker is a singleton and recognition parameters are worker-global, so
+ * a tag OCR and a schedule OCR running concurrently would interleave their
+ * setParameters/recognize pairs. Serialize whole operations through a mutex.
+ */
+let ocrQueue: Promise<unknown> = Promise.resolve();
+
+function enqueue<T>(job: () => Promise<T>): Promise<T> {
+  const run = ocrQueue.then(job, job);
+  ocrQueue = run.catch(() => undefined);
+  return run;
+}
+
+/** Free a scratch canvas's backing store immediately instead of awaiting GC. */
+function release(c: HTMLCanvasElement): void {
+  c.width = 0;
+  c.height = 0;
+}
+
 async function recognizeOnce(
   worker: TessWorker,
   image: HTMLCanvasElement,
@@ -153,21 +172,27 @@ async function recognizeOnce(
  * OCR a small crop around a suspected fixture tag. Returns the best candidate
  * (a *suggestion* for the user to confirm) or null when nothing was read.
  */
-export async function recognizeTagCrop(crop: Drawable): Promise<OcrTagResult | null> {
-  const worker = await getWorker();
-  const variants = [scaled(crop, 1, false), scaled(crop, 2, false), scaled(crop, 4, true)];
-  const candidates: OcrCandidate[] = [];
-  for (const variant of variants) {
-    for (const deg of [0, 90, 180, 270] as const) {
-      const img = rotated(variant, deg);
-      for (const psm of [PSM.AUTO, PSM.SINGLE_LINE]) {
-        candidates.push(
-          await recognizeOnce(worker, img, psm, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-'),
-        );
+export function recognizeTagCrop(crop: Drawable): Promise<OcrTagResult | null> {
+  return enqueue(async () => {
+    const worker = await getWorker();
+    const candidates: OcrCandidate[] = [];
+    // Variants are built (and released) one at a time — a big crop otherwise
+    // holds raw+2x+4x RGBA buffers alive across all 24 recognitions.
+    for (const [factor, binarize] of [[1, false], [2, false], [4, true]] as const) {
+      const variant = scaled(crop, factor, binarize);
+      for (const deg of [0, 90, 180, 270] as const) {
+        const img = rotated(variant, deg);
+        for (const psm of [PSM.AUTO, PSM.SINGLE_LINE]) {
+          candidates.push(
+            await recognizeOnce(worker, img, psm, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-'),
+          );
+        }
+        if (img !== variant) release(img);
       }
+      release(variant);
     }
-  }
-  return pickBestTagCandidate(candidates);
+    return pickBestTagCandidate(candidates);
+  });
 }
 
 export interface OcrWord {
@@ -225,32 +250,37 @@ export function collectWords(
  * input region's coordinate space so the existing column-driven parseSchedule
  * can run on them. Output is a *candidate* the user confirms.
  */
-export async function recognizeScheduleRegion(region: Drawable): Promise<OcrRegionResult[]> {
-  const worker = await getWorker();
-  // Aim the OCR input at ~1600 px on the long side (the resolution band the
-  // Phase 0 spike validated). The caller's region render is usually already
-  // there, so this mostly avoids a second interpolated upscale.
-  const factor = Math.min(3, Math.max(1, 1600 / Math.max(region.width, region.height)));
-  // Sparse mode reads short isolated cells (the TYPE column) that the page
-  // segmenter drops when table grid lines break up its layout analysis.
-  const variants: { image: HTMLCanvasElement; psm: PSM }[] = [
-    { image: scaled(region, factor, false), psm: PSM.AUTO },
-    { image: scaled(region, factor, false), psm: PSM.SPARSE_TEXT },
-    { image: scaled(region, factor, true), psm: PSM.AUTO },
-  ];
-  const results: OcrRegionResult[] = [];
-  for (const v of variants) {
-    await worker.setParameters({
-      tessedit_char_whitelist: '',
-      tessedit_pageseg_mode: v.psm,
-    });
-    const { data } = await worker.recognize(v.image, {}, { blocks: true, text: true });
-    results.push({
-      text: data.text.trim(),
-      words: collectWords(data.blocks, 1 / factor),
-      confidence: data.confidence,
-    });
-  }
-  results.sort((a, b) => b.confidence - a.confidence);
-  return results;
+export function recognizeScheduleRegion(region: Drawable): Promise<OcrRegionResult[]> {
+  return enqueue(async () => {
+    const worker = await getWorker();
+    // Aim the OCR input at ~1600 px on the long side (the resolution band the
+    // Phase 0 spike validated). The caller's region render is usually already
+    // there, so this mostly avoids a second interpolated upscale.
+    const factor = Math.min(3, Math.max(1, 1600 / Math.max(region.width, region.height)));
+    // Sparse mode reads short isolated cells (the TYPE column) that the page
+    // segmenter drops when table grid lines break up its layout analysis.
+    // Variants are built one at a time — each is a multi-megapixel canvas.
+    const variants: { binarize: boolean; psm: PSM }[] = [
+      { binarize: false, psm: PSM.AUTO },
+      { binarize: false, psm: PSM.SPARSE_TEXT },
+      { binarize: true, psm: PSM.AUTO },
+    ];
+    const results: OcrRegionResult[] = [];
+    for (const v of variants) {
+      const image = scaled(region, factor, v.binarize);
+      await worker.setParameters({
+        tessedit_char_whitelist: '',
+        tessedit_pageseg_mode: v.psm,
+      });
+      const { data } = await worker.recognize(image, {}, { blocks: true, text: true });
+      release(image);
+      results.push({
+        text: data.text.trim(),
+        words: collectWords(data.blocks, 1 / factor),
+        confidence: data.confidence,
+      });
+    }
+    results.sort((a, b) => b.confidence - a.confidence);
+    return results;
+  });
 }
