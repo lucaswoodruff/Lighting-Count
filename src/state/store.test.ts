@@ -264,3 +264,14 @@ describe('tag suggestion lifecycle', () => {
     expect(useStore.getState().tagSuggestion).toBeNull();
   });
 });
+
+describe('schedule OCR cancellation', () => {
+  it('setTool clears an in-flight schedule OCR request', () => {
+    const st = useStore.getState();
+    st.setTool('schedule-ocr');
+    useStore.getState().requestScheduleOcr({ a: { x: 0, y: 0 }, b: { x: 9, y: 9 } });
+    expect(useStore.getState().scheduleOcrRequest).not.toBeNull();
+    useStore.getState().setTool('pan');
+    expect(useStore.getState().scheduleOcrRequest).toBeNull();
+  });
+});

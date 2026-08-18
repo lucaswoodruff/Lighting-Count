@@ -272,7 +272,21 @@ export const useStore = create<TakeoffState>((set) => ({
     }),
 
   closeDocument: () =>
-    set({ fileName: null, numPages: 0, pageLabels: [], pages: {}, pendingCalibration: null }),
+    set({
+      fileName: null,
+      numPages: 0,
+      pageLabels: [],
+      pages: {},
+      pendingCalibration: null,
+      pendingMatchBoxes: [],
+      tagSuggestion: null,
+      scheduleOcrRequest: null,
+      scheduleOcr: null,
+      schedule: [],
+      schedulePageLabel: null,
+      scheduleUnreadableLabel: null,
+      scheduleUnreadablePage: null,
+    }),
 
   setPage: (n) =>
     set({
@@ -288,7 +302,15 @@ export const useStore = create<TakeoffState>((set) => ({
       scheduleOcrRequest: null,
     }),
   setTool: (tool) =>
-    set({ tool, pendingCalibration: null, pendingMatchBoxes: [], tagSuggestion: null }),
+    set({
+      tool,
+      pendingCalibration: null,
+      pendingMatchBoxes: [],
+      tagSuggestion: null,
+      // Leaving (or re-entering) a tool cancels any in-flight schedule read —
+      // Esc and toolbar clicks both promise cancellation.
+      scheduleOcrRequest: null,
+    }),
   setActiveTag: (activeTag) => set({ activeTag }),
   setZoom: (zoom) => set({ zoom: Math.min(8, Math.max(0.2, zoom)) }),
   setPendingCalibration: (pendingCalibration) => set({ pendingCalibration }),
