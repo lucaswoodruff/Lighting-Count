@@ -1,6 +1,18 @@
 # Future pursuit: local (in-browser) OCR for scanned / outlined-text drawings
 
-Status: **Phases 2–4 complete — OCR features shipped** (2026-08-18).
+Status: **Phases 2–4 complete + adversarial review converged** (2026-08-18).
+
+Cross-model review loop (Codex/GPT + kW gateway/Kimi K2.7, 4 rounds): fixed a
+stuck-"Reading…" suggestion sentinel (ref-keyed dedup + publish-time store
+checks), serialized the shared Tesseract worker (mutex — setParameters is
+worker-global), made queued OCR abortable (Esc/tool-switch cancels), released
+scratch canvases eagerly, made the pixel cap win over the 1x floor in
+renderRegion, protected user-accepted schedules from the background scan, made
+the schedule-ocr tool visible in the toolbar, and reset OCR state on
+closeDocument. Final verdicts: Kimi GATE: PASS, Codex "no significant
+findings". Accepted as-is: review panel persists across page flips (verifying
+types requires flipping sheets), disposeOcr is caller-owned, ?e2e hooks stay
+(no capability beyond the devtools console in a client-only app).
 
 - **Tag suggestions (Phase 2):** boxing a Match Symbol example OCRs a padded
   crop around it (symbol whited out — it OCRs as letters otherwise) and offers
