@@ -1,0 +1,43 @@
+<!doctype html>
+<!-- Dev-only harness: verifies self-hosted Tesseract assets work end-to-end
+     in the browser with no external requests. Open /ocr-selftest.html and
+     wait for #status to become PASS/FAIL. Safe to ship; linked from nowhere. -->
+<html>
+<body>
+<h1>OCR self-test</h1>
+<pre id="status">running…</pre>
+<canvas id="c" width="216" height="144"></canvas>
+<script type="module">
+const status = document.getElementById('status');
+try {
+  const mod = await import('/tesseract-esm/tesseract.esm.min.js');
+  const { createWorker, PSM } = mod.default ?? mod;
+  const base = new URL('tesseract/', document.baseURI).toString();
+  const worker = await createWorker('eng', 1, {
+    workerPath: base + 'worker.min.js',
+    corePath: base,
+    langPath: base,
+    gzip: true,
+  });
+  // Draw a tag-like crop: "EM1" small text, then 4x upscale like the pipeline.
+  const c = document.getElementById('c');
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 216, 144);
+  ctx.fillStyle = '#111'; ctx.font = '30px monospace';
+  ctx.fillText('EM1', 60, 80);
+  await worker.setParameters({
+    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
+    tessedit_pageseg_mode: PSM.SINGLE_LINE,
+  });
+  const { data } = await worker.recognize(c);
+  const text = data.text.replace(/[^A-Z0-9-]/gi, '').toUpperCase();
+  await worker.terminate();
+  status.textContent = text === 'EM1'
+    ? `PASS: recognized "${text}" (conf ${Math.round(data.confidence)})`
+    : `FAIL: got "${text}" (conf ${Math.round(data.confidence)})`;
+} catch (err) {
+  status.textContent = 'FAIL: ' + err;
+}
+</script>
+</body>
+</html>

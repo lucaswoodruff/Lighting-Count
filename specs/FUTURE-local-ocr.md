@@ -1,6 +1,53 @@
 # Future pursuit: local (in-browser) OCR for scanned / outlined-text drawings
 
-Status: **not implemented** — plan document only. This is the one capability gap
+Status: **Phase 1 complete — OCR infrastructure in place** (2026-08-18).
+
+- `src/core/ocr.ts`: `recognizeTagCrop()` (Phase 0 sweep pipeline: variants ×
+  rotations × PSMs, pattern-first scoring) and `recognizeScheduleRegion()`,
+  plus pure scoring helpers covered by `src/core/ocr.test.ts`. Tesseract runs
+  in its own Web Worker; lazy singleton, `disposeOcr()` to release WASM memory.
+- `public/tesseract/`: self-hosted worker.min.js, LSTM core WASM builds
+  (plain/simd/relaxedsimd), and eng.traineddata.gz (~18 MB total). Served
+  from app origin; fetched lazily on first OCR use — zero startup cost and
+  no runtime network, preserving the drawings-never-leave-the-machine promise.
+- Verified in a real headless browser via `public/ocr-selftest.html`
+  (`vite preview`, open `/ocr-selftest.html` → "PASS: recognized EM1
+  (conf 90)"; network log showed only same-origin requests).
+- Not yet wired into any UI — that's Phase 2 (auto-label Match Symbol hits)
+  and Phase 3 (scanned schedule regions). Import `ocr.ts` via dynamic
+  `import()` at call sites so the main bundle stays lean.
+
+Phase 0 (2026-08-18): **GO for Tesseract.js.** Spike script,
+fixture generator, and test crops live in `specs/ocr-spike/`
+(`npm i tesseract.js sharp && node spike.mjs`; `TAGSET=tags300` selects the
+300-DPI-equivalent set). Results:
+
+| Fixture set | Baseline (raw crop, defaults) | Full pipeline |
+|---|---|---|
+| Tags @ ~300 DPI equiv (incl. 90/180° rotations) | 5/8 | **8/8** |
+| Tags @ ~100 DPI equiv (9–12 px text) | 0/8 | 3/8 |
+| Schedule table region (3× upscale) | — | 18/21 words |
+
+What the spike taught us, beyond the plan's original mitigations:
+
+- **Candidate sweep + pattern-first scoring is the key mitigation.** Run
+  {raw, 2× upscale, 4× upscale+binarize} × {0/90/180/270} × {PSM auto,
+  single-line} and pick the result matching the tag regex
+  (`^[A-Z]{1,3}-?\d{1,3}[A-Z]?$`) with highest confidence. Picking by
+  confidence alone chooses garbage; a single preprocessing recipe loses to
+  baseline on clean input (harsh binarization *degrades* decent crops).
+- **PSM single-line alone fails** — leader lines/arc clutter in the crop
+  breaks the single-line assumption; PSM auto must stay in the sweep.
+- **Resolution is the gate.** ~300 DPI-equivalent (tag text ≥ ~25 px tall)
+  works; ~100 DPI does not. The UI should upsample crops from the source
+  raster and warn/suppress suggestions when effective text height is tiny.
+- ~24 recognitions per crop is fine for one-crop-per-match-group usage.
+- Schedule misses were small numerics — acceptable since the parse path shows
+  the OCR grid for user correction before `parseSchedule`.
+- Fixtures are synthetic (noise + blur + clutter). Replace/augment with real
+  scanned-sheet crops when a project drawing is available.
+
+Original plan below. This is the one capability gap
 left after R1–R8: drawings whose text is outlined vectors or a raster scan have
 no text layer, so tag detection (`src/core/detect.ts`) and schedule parsing
 (`src/core/schedule.ts`) find nothing, and Match Symbol finds occurrences but
