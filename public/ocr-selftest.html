@@ -10,7 +10,7 @@
 <script type="module">
 const status = document.getElementById('status');
 try {
-  const mod = await import('/tesseract-esm/tesseract.esm.min.js');
+  const mod = await import(new URL('tesseract-esm/tesseract.esm.min.js', document.baseURI).href);
   const { createWorker, PSM } = mod.default ?? mod;
   const base = new URL('tesseract/', document.baseURI).toString();
   const worker = await createWorker('eng', 1, {
