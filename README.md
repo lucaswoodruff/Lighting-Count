@@ -22,9 +22,11 @@ All processing happens in the browser. Drawings never leave your machine.
    **Match Symbol** instead: drag a snug box around an example fixture symbol
    — box several examples if the symbol prints slightly differently — then
    name the type, and the app finds everything matching any of the examples
-   by image correlation. Results merge, so if some fixtures were missed, box
-   a missed one and run the same type again to top up the count. Rotated
-   copies are not matched — run once per orientation if needed.
+   by image correlation. **Read name (OCR)** proposes the type name by
+   reading the label printed next to your boxed example with local, in-browser
+   OCR (all assets self-hosted — still nothing leaves your machine). Results
+   merge, so if some fixtures were missed, box a missed one and run the same
+   type again to top up the count.
 4. **Draw areas** — click vertices, double-click (or Enter) to close, or use
    the Rectangle tool to drag rectangular areas. Multiple named areas per
    sheet are supported.

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { findTagCandidates } from '../core/detect';
 import { detectScales } from '../core/scaleDetect';
 import { crop } from '../core/match';
+import { binarize, expandBox, grayToCanvas, ocrWords, pickTagNear, voteTag } from '../core/ocr';
 import type { MatchWorkRequest, MatchWorkResponse } from '../workers/matchWorker';
 import { looksLikeSchedulePage, parseSchedule } from '../core/schedule';
 import { detectSheetNumber } from '../core/sheetLabel';
@@ -11,6 +12,7 @@ import {
   getPageLabels,
   loadPdf,
   renderPageGray,
+  renderRegionGray,
   type PDFDocumentProxy,
 } from '../pdf/pdfService';
 import { clearSession, loadSession, sessionKey, startAutosave } from '../state/persist';
@@ -152,6 +154,52 @@ export default function App() {
       cancelled = true;
     };
   }, [doc, currentPage]);
+
+  // OCR the neighborhood of the boxed example(s) to propose the tag name —
+  // for drawings whose text is outlined vectors or a scan. Crops only, all
+  // assets self-hosted: nothing leaves the machine.
+  const ocrNameRequest = useStore((s) => s.ocrNameRequest);
+  useEffect(() => {
+    if (!ocrNameRequest || !doc) return;
+    const boxes = ocrNameRequest;
+    const st = useStore.getState();
+    const pageNum = st.currentPage;
+    st.setMatchStatus('Reading the tag name near the boxed example(s)… first use loads the OCR engine (~6 MB, one time).');
+    let cancelled = false;
+    (async () => {
+      const dims = await getPageDims(doc, pageNum);
+      const picks: (string | null)[] = [];
+      for (const box of boxes) {
+        // Render the neighborhood crisp from the vectors (8x), then keep
+        // only near-black ink so gray gridlines can't corrupt the label.
+        const r = expandBox(box.a, box.b, dims.width, dims.height);
+        const region = await renderRegionGray(doc, pageNum, r.x, r.y, r.w, r.h, 8);
+        const canvas = grayToCanvas(binarize(region));
+        const words = await ocrWords(canvas);
+        picks.push(pickTagNear(words, { x: canvas.width / 2, y: canvas.height / 2 }));
+        if (cancelled) return;
+      }
+      if (cancelled) return;
+      const tag = voteTag(picks);
+      const s2 = useStore.getState();
+      if (tag) {
+        s2.setOcrSuggestedTag(tag);
+        s2.setMatchStatus(`OCR suggests "${tag}" — confirm or edit the name, then Find matches.`);
+      } else {
+        s2.setMatchStatus(
+          'OCR could not read a tag near the example — enlarge the box to include the label, or type the name.',
+        );
+      }
+      s2.clearOcrNameRequest();
+    })().catch((e) => {
+      const s2 = useStore.getState();
+      s2.setMatchStatus(`OCR failed: ${e instanceof Error ? e.message : e}`);
+      s2.clearOcrNameRequest();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ocrNameRequest, doc]);
 
   // Execute symbol-match requests (this component owns the pdf document).
   const matchRequest = useStore((s) => s.matchRequest);

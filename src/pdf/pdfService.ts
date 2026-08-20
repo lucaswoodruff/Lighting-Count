@@ -129,6 +129,35 @@ export async function renderPageGray(
 }
 
 /**
+ * Rasterize one page-space rectangle at high resolution straight from the
+ * PDF vectors (no cache — OCR crops are small and each render is cheap on
+ * memory because only the region's pixels are kept). Text comes out crisp,
+ * unlike upscaling the page-wide gray raster.
+ */
+export async function renderRegionGray(
+  doc: PDFDocumentProxy,
+  pageNum: number,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  scale: number,
+): Promise<GrayImage> {
+  const page = await doc.getPage(pageNum);
+  const viewport = page.getViewport({ scale, offsetX: -x * scale, offsetY: -y * scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.ceil(w * scale));
+  canvas.height = Math.max(1, Math.ceil(h * scale));
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('Canvas 2D context unavailable');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  return toGray(imageData.data, canvas.width, canvas.height);
+}
+
+/**
  * All text strings on a page with bounding-box centers in page space
  * (top-left origin, PDF points). Feeds tag detection and marker placement.
  */

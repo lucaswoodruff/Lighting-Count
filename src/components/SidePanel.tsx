@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { downloadMultiSheetXlsx, downloadXlsx } from '../core/exportXlsx';
 import {
   COMMON_SCALES,
@@ -298,8 +298,20 @@ function MatchControls() {
   const matchStatus = useStore((s) => s.matchStatus);
   const requestMatch = useStore((s) => s.requestMatch);
   const clearPendingMatchBoxes = useStore((s) => s.clearPendingMatchBoxes);
+  const requestOcrName = useStore((s) => s.requestOcrName);
+  const ocrBusy = useStore((s) => s.ocrNameRequest !== null);
+  const ocrSuggestedTag = useStore((s) => s.ocrSuggestedTag);
+  const setOcrSuggestedTag = useStore((s) => s.setOcrSuggestedTag);
   const [matchTag, setMatchTag] = useState('');
   const [threshold, setThreshold] = useState(0.8);
+
+  // Adopt an OCR-proposed name into the input, still user-editable.
+  useEffect(() => {
+    if (ocrSuggestedTag) {
+      setMatchTag(ocrSuggestedTag);
+      setOcrSuggestedTag(null);
+    }
+  }, [ocrSuggestedTag, setOcrSuggestedTag]);
 
   function run() {
     const tag = matchTag.trim().toUpperCase();
@@ -338,6 +350,13 @@ function MatchControls() {
             </select>
             <button className="primary" disabled={!matchTag.trim()} onClick={run}>
               Find matches
+            </button>
+            <button
+              disabled={ocrBusy}
+              title="Read the tag name printed next to the boxed example(s) with local OCR — nothing leaves your machine"
+              onClick={requestOcrName}
+            >
+              {ocrBusy ? 'Reading…' : 'Read name (OCR)'}
             </button>
             <button
               onClick={() => {

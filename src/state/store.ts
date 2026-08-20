@@ -65,6 +65,10 @@ interface TakeoffState {
   pendingMatchBoxes: PendingMatch[];
   matchRequest: MatchRequest | null;
   matchStatus: string | null;
+  /** Example boxes snapshotted for an OCR read-the-tag-name run. */
+  ocrNameRequest: PendingMatch[] | null;
+  /** Tag name proposed by OCR, awaiting user confirmation in the input. */
+  ocrSuggestedTag: string | null;
   pages: Record<number, PageState>;
   /** Parsed fixture schedule for the document (types, counts, watts). */
   schedule: ScheduleEntry[];
@@ -94,6 +98,9 @@ interface TakeoffState {
   requestMatch(tag: string, threshold: number): void;
   clearMatchRequest(): void;
   setMatchStatus(s: string | null): void;
+  requestOcrName(): void;
+  clearOcrNameRequest(): void;
+  setOcrSuggestedTag(tag: string | null): void;
   mergeMatchedPoints(page: number, tag: string, points: Pt[], dedupeRadius: number): void;
   removeTag(tag: string): void;
   setScale(scale: ScaleSetting): void;
@@ -158,6 +165,8 @@ export const useStore = create<TakeoffState>((set) => ({
   pendingMatchBoxes: [],
   matchRequest: null,
   matchStatus: null,
+  ocrNameRequest: null,
+  ocrSuggestedTag: null,
   pages: {},
   schedule: [],
   schedulePageLabel: null,
@@ -178,6 +187,8 @@ export const useStore = create<TakeoffState>((set) => ({
       pendingMatchBoxes: [],
       matchRequest: null,
       matchStatus: null,
+      ocrNameRequest: null,
+      ocrSuggestedTag: null,
       schedule: [],
       schedulePageLabel: null,
       scheduleUnreadableLabel: null,
@@ -240,6 +251,15 @@ export const useStore = create<TakeoffState>((set) => ({
     ),
   clearMatchRequest: () => set({ matchRequest: null }),
   setMatchStatus: (matchStatus) => set({ matchStatus }),
+
+  requestOcrName: () =>
+    set((s) =>
+      s.pendingMatchBoxes.length > 0 && !s.ocrNameRequest
+        ? { ocrNameRequest: [...s.pendingMatchBoxes] }
+        : {},
+    ),
+  clearOcrNameRequest: () => set({ ocrNameRequest: null }),
+  setOcrSuggestedTag: (ocrSuggestedTag) => set({ ocrSuggestedTag }),
 
   /**
    * Merge symbol-match results into `tag`'s detection points: appends only
